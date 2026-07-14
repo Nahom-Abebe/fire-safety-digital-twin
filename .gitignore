@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyd
+venv/
+env/
+rag/adb_vectordb/
+bim/_result.json
+bim/_bake_input.json
+bim/_bake_input.json
+bim/room_centroids.json
+.env
+*.mp4
+*.blend1
+Thumbs.db
+desktop.ini

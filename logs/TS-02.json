@@ -1,0 +1,22 @@
+{
+  "scenario_id": "TS-02",
+  "latency_seconds": 46.938,
+  "tool_count": 9,
+  "tools_used": [
+    "sense_building_state",
+    "get_regulations",
+    "list_signs",
+    "act_update_sign",
+    "act_update_sign",
+    "act_update_sign",
+    "act_update_sign",
+    "act_update_sign",
+    "act_update_board"
+  ],
+  "directive": "---\n\n## **SENSE-REASON-ACT CYCLE COMPLETE**\n\n### **SENSE PHASE**\n\u2705 Building state retrieved: **80 occupants** across 4 floors\n- **5 active compliance alerts** (1 OVER, 4 WARNING)\n- **7 evacuation signs** available for redirection\n- **North exit route** reported obstructed\n\n### **REASON PHASE**\n\n**Regulatory Authority Retrieved:**\n- **ADB Vol2 Table 2.1** (p.26): Purpose Group 2(a) Residential Institutional\n  - **Maximum travel distance, one direction only: 9m**\n  - **Maximum travel distance, more than one direction: 18m**\n\n- **ADB Vol2 Section 2.7** (p.25): Alternative escape routes must be available when the primary route is obstructed or compromised\n\n**Occupancy Alerts:**\n| Room | Floor | Current | Max | Status | Severity |\n|------|-------|---------|-----|--------|----------|\n| 3-6  | F3    | 5       | 3   | OVER   | CRITICAL |\n| 1-2  | F1    | 3       | 3   | AT CAP | WARNING  |\n| 2-7  | F2    | 5       | 5   | AT CAP | WARNING  |\n| 3-8  | F3    | 3       | 3   | AT CAP | WARNING  |\n| 3-12 | F3    | 3       | 3   | AT CAP | WARNING  |\n\n### **ACT PHASE**\n\n**Signs Updated (5 total):**\n\n1. **SIGN_F0_CORRIDOR_N** \u2192 **BLOCKED** \u2705\n   - *Message:* \"North Corridor OBSTRUCTED \u2014 Use South Exit per ADB Table 2.1\"\n   - *Citation:* ADB Vol2 Table 2.1 + Section 2.7\n\n2. **SIGN_F0_EXIT_N** \u2192 **BLOCKED** \u2705\n   - *Message:* \"North Exit CLOSED \u2014 Emergency: Use South Exit (SIGN_F0_EXIT_S)\"\n   - *Citation:* ADB Vol2 Table 2.1 Purpose Group 2(a) limits\n\n3. **SIGN_F1_STAIR** \u2192 **ALTERNATE** \u2705\n4. **SIGN_F2_STAIR** \u2192 **ALTERNATE** \u2705\n5. **SIGN_F3_STAIR** \u2192 **ALTERNATE** \u2705\n   - All three stairwell signs now direct occupants to **South Exit** instead of North\n   - *Citation:* ADB Vol2 Table 2.1 + Section 2.7\n\n**Board Updated:** \u2705 Emergency directive posted with specific ADB section citations and occupancy summary.\n\n---\n\n**All occupants will now avoid the north route and egress via the south exit, maintaining compliance with ADB Table 2.1 travel distance requirements for Purpose Group 2a (Residential Institutional) care homes.**",
+  "adb_cited": true,
+  "sign_updates": 5,
+  "timestamp": "2026-07-14 14:43:42",
+  "scenario": "Exit obstruction",
+  "pre_condition": "North exit blocked"
+}

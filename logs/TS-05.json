@@ -1,0 +1,17 @@
+{
+  "scenario_id": "TS-05",
+  "latency_seconds": 17.452,
+  "tool_count": 4,
+  "tools_used": [
+    "sense_building_state",
+    "sense_room",
+    "check_compliance",
+    "act_update_board"
+  ],
+  "directive": "---\n\n## SUMMARY\n\n**Building Status: \u2713 SAFE \u2014 NO VIOLATIONS**\n\n| **Metric** | **Result** |\n|---|---|\n| **Total Occupancy** | 40 people |\n| **Compliance** | All rooms PASS per ADB Vol2 Table B1 (Purpose Group 2a) |\n| **Alerts** | 1 graph-level WARNING (Room 1-12 @ 3/3) |\n| **Violations** | 0 (WARNING is false positive; IFC max = 130, current = 3) |\n| **Actions Taken** | None \u2014 room is compliant |\n| **Signs Updated** | None |\n| **Attractiveness Adjusted** | None |\n\n**Conclusion:** The building is operating safely within all ADB requirements. Room 1-12's graph-level capacity is transient/local, but the authoritative IFC model confirms it is well within safe limits for a Lounge under Purpose Group 2a classification. All other rooms are comfortably below their capacities. The system is idle and requires no corrective action.",
+  "adb_cited": true,
+  "sign_updates": 0,
+  "timestamp": "2026-07-14 14:46:26",
+  "scenario": "Baseline normal occupancy",
+  "pre_condition": "0 OVER, 1 WARNING"
+}
