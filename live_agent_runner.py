@@ -3,17 +3,10 @@
 # and lets Claude reason about what it sees in real time.
 #
 # Fixes applied in this version:
-#   - live_reposition_markers() used instead of reposition_markers()
-#     (fire-and-forget, no result file competition, markers stay visible)
-#   - Floor colours only turn RED on AGENT-CONFIRMED violations,
-#     not raw graph alerts (no red for false positives)
-#   - board.py now removes "Evacuated" counter and truncates text
-#   - bulk_update_occupancy_psets removed from tick loop
-#     (was causing result file competition with marker repositioning)
-#   - agent uses claude-haiku-4-5 for live demo (5x faster than Sonnet)
-#
-# Run: python live_agent_runner.py
-# Run: python live_agent_runner.py --ticks 20 --delay 2.0 --sense-every 3
+#   - Fixed floor colour persistence: floors revert to GREEN when violations clear
+#   - Optimized Blender IPC: floor colours only updated when floor states change
+#   - Unified default seed across CLI and function signature (default 16)
+#   - Added try-except wrapper around Blender IPC calls to prevent tick loop crashes
 
 import sys, os, json, time, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -58,9 +51,9 @@ def _clear_baked_animation():
     """
     Removes all keyframe animation data from occupant markers and
     floor materials left over from a previous bake_animation.py run.
-    Also removes the baked board frame_change_pre handler.
     """
-    send_to_blender("""
+    try:
+        send_to_blender("""
 import bpy
 
 cleared_markers = 0
@@ -97,8 +90,9 @@ for area in bpy.context.screen.areas:
         area.tag_redraw()
 
 print(f'Cleared {cleared_markers} markers, {cleared_mats} floor mats')
-print('Baked animation removed — ready for live mode')
 """)
+    except Exception as e:
+        print(f"Warning: Failed to clear baked animation: {e}")
 
 
 # ── Floor colour update ───────────────────────────────────────────────────────
@@ -106,15 +100,8 @@ print('Baked animation removed — ready for live mode')
 def _update_floor_colours(confirmed_red_floors: set):
     """
     Updates floor colours based on AGENT-CONFIRMED violations only.
-    confirmed_red_floors: set of floor name strings the agent has
-                          genuinely acted on (signs_updated > 0).
-
-    GREEN = all rooms compliant (or agent found no genuine violation)
+    GREEN = all rooms compliant
     RED   = agent confirmed an over-capacity room on this floor
-
-    Critically: raw graph alerts (3/3 rooms that are PASS on IFC check)
-    do NOT turn a floor red. Only sign-update-confirmed violations do.
-    This prevents false-positive alerts from flashing the building red.
     """
     colour_lines = []
     for floor_name, col_name in FLOOR_COLLECTIONS.items():
@@ -160,7 +147,10 @@ for area in bpy.context.screen.areas:
     if area.type == 'VIEW_3D':
         area.tag_redraw()
 """
-    send_to_blender(code)
+    try:
+        send_to_blender(code)
+    except Exception as e:
+        print(f"Warning: Failed to update floor colours in Blender: {e}")
 
 
 # ── Main live loop ────────────────────────────────────────────────────────────
@@ -169,19 +159,8 @@ def run(total_ticks: int = 25,
         sense_every: int = 3,
         total_occupants: int = 80,
         tick_delay: float = 2.0,
-        seed: int = 42,
+        seed: int = 16,
         verbose: bool = True):
-    """
-    Main live occupancy management loop.
-
-    total_ticks     : total simulation ticks to run
-    sense_every     : agent checks every N ticks (also triggers immediately
-                      when over-capacity rooms are detected)
-    total_occupants : starting occupant count
-    tick_delay      : seconds between ticks — controls visual pacing
-    seed            : random seed for reproducibility
-    verbose         : print agent tool calls to terminal
-    """
 
     # ── API key ───────────────────────────────────────────────────────────
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -227,13 +206,16 @@ def run(total_ticks: int = 25,
     create_board()
     update_board(snapshot, "Live occupancy monitoring active")
 
-    print("Setting all floors to GREEN (all compliant at start)...")
-    _update_floor_colours(set())   # empty set = all green
+    # Set initial state
+    confirmed_red_floors = set()
+    last_rendered_red_floors = None  # Caching for socket performance
+    
+    _update_floor_colours(confirmed_red_floors)
+    last_rendered_red_floors = set(confirmed_red_floors)
 
     frame_view_on_objects("Occupant_")
 
     # ── Session tracking ──────────────────────────────────────────────────
-    confirmed_red_floors = set()   # floors with AGENT-confirmed violations
     session_log = {
         "config": {
             "total_ticks"     : total_ticks,
@@ -260,18 +242,23 @@ def run(total_ticks: int = 25,
         snapshot = get_sensor_snapshot()
 
         # ── Update Blender visuals ────────────────────────────────────────
-        # live_reposition_markers: fire-and-forget, no result file
         live_reposition_markers(snapshot)
-
-        # Floor colours: only confirmed violations turn red
-        _update_floor_colours(confirmed_red_floors)
-
-        # Board: clean short text, no evacuated counter
         update_board(snapshot)
 
         # ── Tick summary ──────────────────────────────────────────────────
         warns = [a for a in snapshot["alerts"] if a["severity"] == "WARNING"]
         overs = [a for a in snapshot["alerts"] if a["severity"] == "OVER"]
+
+        # Prune confirmed red floors if the underlying OVER condition cleared
+        current_over_floors = {
+            _LABEL_TO_FLOOR.get(a["label"]) for a in overs if _LABEL_TO_FLOOR.get(a["label"])
+        }
+        confirmed_red_floors &= current_over_floors
+
+        # Only update floor materials in Blender if the floor status set actually changed
+        if confirmed_red_floors != last_rendered_red_floors:
+            _update_floor_colours(confirmed_red_floors)
+            last_rendered_red_floors = set(confirmed_red_floors)
 
         session_log["ticks"].append({
             "tick"     : tick,
@@ -342,16 +329,17 @@ def run(total_ticks: int = 25,
             )
 
             # ── Update confirmed violations ───────────────────────────────
-            # Only turn floors RED when the agent actually updated signs
-            # (i.e. check_compliance returned FAIL, not just a graph alert)
             if result["signs_updated"] > 0:
                 for a in overs:
                     fl = _LABEL_TO_FLOOR.get(a["label"])
                     if fl:
                         confirmed_red_floors.add(fl)
-                # Refresh floor colours immediately after confirmation
-                _update_floor_colours(confirmed_red_floors)
-                print(f"  Floor(s) confirmed RED: {confirmed_red_floors}")
+
+                # Refresh floor colours immediately if a new violation was confirmed
+                if confirmed_red_floors != last_rendered_red_floors:
+                    _update_floor_colours(confirmed_red_floors)
+                    last_rendered_red_floors = set(confirmed_red_floors)
+                    print(f"  Floor(s) confirmed RED: {confirmed_red_floors}")
 
             # ── Log ───────────────────────────────────────────────────────
             session_log["agent_cycles"].append({
@@ -367,7 +355,7 @@ def run(total_ticks: int = 25,
                 for a in overs:
                     session_log["rooms_managed"].add(a["label"])
 
-            # Update board with agent directive (truncated by board.py)
+            # Update board with agent directive
             update_board(snapshot, result["directive"])
 
             print(f"\n  Agent cycle complete:")
@@ -441,7 +429,7 @@ if __name__ == "__main__":
     parser.add_argument("--delay", type=float, default=2.0,
                         help="Seconds between ticks (default 2.0)")
     parser.add_argument("--seed", type=int, default=16,
-                    help="Random seed (default 16)")
+                        help="Random seed (default 16)")
     parser.add_argument("--quiet", action="store_true",
                         help="Hide agent tool call details")
 

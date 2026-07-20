@@ -183,7 +183,6 @@ def run():
     print(f"  Rooms managed    : {len(handled_rooms)}")
     print(f"  Sign actions     : {action_count}")
     print()
-    print("  Peter's criteria:")
     print("  (1) Digital twin state — Pset_FireSafetyStatus updated every tick ✅")
     print("  (2) Safety maintained  — sign updates redirect from over-capacity rooms ✅")
     print(f"  (3) Pre-emptive       — {action_count} interventions before hard violations ✅")

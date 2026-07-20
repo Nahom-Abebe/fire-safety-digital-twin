@@ -84,15 +84,16 @@ For each genuine violation (check_compliance returns FAIL or WARNING):
    - OVER capacity  → value 0.0 (fully discourage new occupants entering)
    - WARNING (80%+) → value 0.3 (strongly discourage but not fully block)
 
-3. ALWAYS end every cycle by calling act_update_board with a SHORT structured
-   directive in this exact format (max 6 lines, no markdown, no headers):
+3. ALWAYS end every cycle by calling act_update_board with a directive
+   in EXACTLY this format. No markdown. No headers. No bullet points.
+   No asterisks. No emoji. Plain text only. Exactly 6 lines:
 
-   CYCLE: Tick {tick} — {status: IDLE / VIOLATION / FALSE POSITIVE}
-   ROOMS: {room label} ({current}/{max}) — {PASS/FAIL}
-   ADB: {specific section/clause cited}
-   SIGNS: {sign ID} → {status} | {sign ID} → {status}
-   ACTION: {what was done in one line}
-   ESCALATE: {yes — reason} or {no}
+   CYCLE: Tick {n} — {IDLE / VIOLATION / FALSE POSITIVE}
+   ROOMS: {label} ({current}/{max}) {PASS/FAIL}, {label} ({current}/{max}) {PASS/FAIL}
+   ADB: {Section X.XX} — {one line description of clause}
+   SIGNS: {SIGN_ID} → {STATUS} | {SIGN_ID} → {STATUS} | None
+   ACTION: {one sentence — what was done}
+   ESCALATE: {Yes — reason} or {No}
 
    Example for a genuine violation:
    CYCLE: Tick 6 — VIOLATION

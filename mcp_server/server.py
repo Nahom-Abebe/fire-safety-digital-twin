@@ -1,13 +1,8 @@
 # mcp_server/server.py
-# FastMCP server — the interoperability layer (Section 3.4 of report).
+# FastMCP server — the interoperability layer .
 # Exposes 9 typed tools covering Sense, Reason and Act operations.
-#
-# Fix applied: removed module-level initialise_occupants() and create_board()
-# calls. These were firing on every import, resetting the simulation state
-# to 80 occupants/seed=42 even when test_scenarios.py had already
-# initialised with different parameters (e.g. TS-05 with 40 occupants).
 # Each calling script (live_agent_runner, test_scenarios, phase2_runner)
-# now owns its own initialisation.
+# owns its own initialisation.
 #
 # Run standalone: python -m mcp_server.server
 
