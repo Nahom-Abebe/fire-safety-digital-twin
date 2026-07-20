@@ -180,8 +180,6 @@ BUILDING_GRAPH = build_graph()
 
 def get_max_occupancy(node_id: int) -> int:
     area = BUILDING_GRAPH.nodes[node_id].get("area_m2", 0)
-    # ADB formula: 1 person per 6m² (Purpose Group 2a)
-    # Minimum of 3 to prevent trivial overcrowding in small rooms
     return max(3, int(area / ADB_M2_PER_PERSON))
 
 def get_exit_path(node_id: int) -> dict:

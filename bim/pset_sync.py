@@ -1,7 +1,6 @@
 # bim/pset_sync.py
 # Writes live occupancy data to Pset_FireSafetyStatus for every
 # occupied room in a single batched Blender round trip.
-# Also writes FireAlarmStatus=True to the fire zone space (Peter's pattern).
 
 import json, os
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE

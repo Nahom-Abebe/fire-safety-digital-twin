@@ -1,7 +1,7 @@
 {
   "scenario_id": "TS-01",
-  "latency_seconds": 53.336,
-  "tool_count": 15,
+  "latency_seconds": 38.559,
+  "tool_count": 13,
   "tools_used": [
     "sense_building_state",
     "sense_room",
@@ -10,19 +10,17 @@
     "get_regulations",
     "get_regulations",
     "get_regulations",
-    "get_regulations",
     "check_compliance",
     "check_compliance",
-    "get_adb_violation_context",
     "list_signs",
     "act_update_sign",
     "act_set_room_attractiveness",
     "act_update_board"
   ],
-  "directive": "## CYCLE COMPLETE \u2713\n\n---\n\n### SUMMARY\n\n**SENSE:** Identified two OVER-capacity alerts on ground floor:\n- Room 0-4 (Bedroom): 4/3 occupants\n- Room 0-20 (Lounge): 15/7 occupants (graph-level)\n\n**REASON:**\n1. **Room 0-4 (Bedroom)**: `check_compliance` returned **FAIL** (4 > IFC max of 3) \u2192 **GENUINE VIOLATION** of **ADB Vol2 Section 2.43** (\"Bedrooms should not contain more than one single or double bed\")\n2. **Room 0-20 (Lounge)**: `check_compliance` returned **PASS** (15 \u2264 IFC max of 130 per Table B1) \u2192 **FALSE POSITIVE** alert. The IFC model's authoritative capacity (based on ADB Table B1 floor space factors for Purpose Group 2a) overrides the graph-level constraint.\n\n**ACT:**\n- \u2705 **SIGN_F0_CORRIDOR_N** set to **BLOCKED** with message citing ADB Cl.2.43\n- \u2705 **Room 0-4 attractiveness** set to **0.0** (fully discourage entry)\n- \u2705 **Board updated** with complete directive citing **ADB Vol2 Section 2.43** and noting the false positive finding\n\n**Result:** Ground floor bedroom overcrowding controlled. Room 0-20 lounge confirmed compliant with ADB capacity guidelines.",
+  "directive": "---\n\n## **CYCLE COMPLETE: SENSE \u2192 REASON \u2192 ACT**\n\n### **Summary:**\n\n**SENSE:** Building state reveals two OVER capacity alerts on Ground Floor:\n- Room 0-4: 4/3 occupants\n- Room 0-20: 15/7 occupants\n\n**REASON:**\n- **Room 0-4 (Bedroom):** Check_compliance returned **FAIL** \u2014 4 occupants exceeds max of 3\n  - **ADB Section 2.43 (retrieved):** \"Bedrooms should not contain more than one single or double bed\"\n  - Justification: Table B1 Purpose Group 2a occupant load factor for residential care home bedrooms\n  \n- **Room 0-20 (Lounge):** Check_compliance returned **PASS** \u2014 15 occupants is compliant (max 130)\n  - This was a **false positive** from the graph-level alert; the IFC model confirms it is safe\n\n**ACT:**\n1. \u2705 **Sign SIGN_F0_CORRIDOR_N blocked** with message citing ADB Section 2.43\n2. \u2705 **Room 0-4 attractiveness set to 0.0** (fully discourage new occupants)\n3. \u2705 **Board updated** with violation directive and escalation flag\n\n**Specific ADB Citation:**  \n**ADB Vol2 Section 2.43 \u2014 \"Bedrooms should not contain more than one single or double bed\"**  \n(Purpose Group 2a residential care home occupancy standard per Table B1)\n\n**Status:** Genuine occupancy violation confirmed and managed. Escalation flagged because bedroom remains overcrowded despite preventative measures\u2014suggests active occupant flow control or staff intervention needed.",
   "adb_cited": true,
   "sign_updates": 1,
-  "timestamp": "2026-07-14 14:42:55",
+  "timestamp": "2026-07-20 10:09:56",
   "scenario": "Single room congestion",
   "pre_condition": "2 violations"
 }

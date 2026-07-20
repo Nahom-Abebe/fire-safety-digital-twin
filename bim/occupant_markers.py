@@ -18,6 +18,7 @@ COLOUR_OVER    = (0.90, 0.10, 0.10, 1.0)  # red    — over capacity
 
 _HELPERS = r"""
 import bpy, bmesh
+
 def _col():
     sc = bpy.context.scene.collection
     c = bpy.data.collections.get('OccupantMarkers')
@@ -32,12 +33,24 @@ def _col():
         for ch in lc.children: _u(ch)
     _u(bpy.context.view_layer.layer_collection)
     return c
+
 def _cone(name, r1, r2, depth):
-    mesh = bpy.data.meshes.new(name+'_m')
+    mesh = bpy.data.meshes.new(name + '_m')
     bm = bmesh.new()
     bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=8,
                            radius1=r1, radius2=r2, depth=depth)
     bm.to_mesh(mesh); bm.free()
+
+    # Create unique emissive material for this cone
+    mat = bpy.data.materials.new(name=name + '_mat')
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get('Principled BSDF')
+    if bsdf:
+        # Default blue — will be overridden by keyframe or obj.color
+        bsdf.inputs['Base Color'].default_value    = (0.15, 0.45, 0.90, 1.0)
+        bsdf.inputs['Emission Color'].default_value = (0.15, 0.45, 0.90, 1.0)
+        bsdf.inputs['Emission Strength'].default_value = 1.5
+    mesh.materials.append(mat)
     return bpy.data.objects.new(name, mesh)
 """
 
@@ -88,9 +101,24 @@ try:
         obj = _cone(f'Occupant_{{mid:03d}}', 0.25, 0.05, 1.7)
         col.objects.link(obj)
         obj.location = (x, y, z + 0.85)
-        obj.color = (r, g, b, a)
+        
+        # ─── Define Highly Visible Safety Orange (RGBA) ───────────────────
+        safety_orange = (1.0, 0.38, 0.0, 1.0)
+        
+        obj.color = safety_orange  # Works in SOLID+OBJECT viewport mode
         obj.hide_viewport = False
         obj.hide_render   = False
+        
+        # Set material color properties for Material Preview / Rendered mode
+        if obj.data.materials:
+            mat  = obj.data.materials[0]
+            bsdf = mat.node_tree.nodes.get('Principled BSDF')
+            if bsdf:
+                bsdf.inputs['Base Color'].default_value     = safety_orange
+                bsdf.inputs['Emission Color'].default_value  = safety_orange
+                bsdf.inputs['Emission Strength'].default_value = 5.0  # Extra bright pop
+        # ──────────────────────────────────────────────────────────────────
+                
         created += 1
     report = {{'status': 'ok', 'created': created}}
 except Exception as e:
@@ -104,7 +132,6 @@ for area in bpy.context.screen.areas:
     r = _read_result(timeout=25.0)
     r["requested"] = len(placements)
     return r
-
 
 # ── Full reposition (phase2_runner) ───────────────────────────────────────────
 

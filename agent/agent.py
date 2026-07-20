@@ -1,7 +1,7 @@
 # agent/agent.py
 # Claude Sense-Reason-Act agent for care home occupancy management.
 #
-# Design philosophy (aligned with Peter Lawrence's emails):
+# Design notes:
 #   - This is an OCCUPANCY MANAGEMENT system, not an evacuation system
 #   - The agent monitors room capacity tick by tick
 #   - When a room approaches or exceeds its ADB limit, the agent:
@@ -10,8 +10,6 @@
 #       3. Updates the relevant sign to redirect occupants
 #       4. Lowers room attractiveness so new occupants avoid that area
 #       5. Informs the building manager via the board
-#   - NO evacuation logic, NO fire alarm framing
-#   - The agent responds to what it ACTUALLY sees in the live simulation
 
 import sys, os, json, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,8 +25,7 @@ real time.
 
 YOUR ROLE:
 You manage room and corridor occupancy levels to keep them within safe limits
-defined by UK Approved Document B (ADB) Volume 2. This is NOT a fire evacuation
-system. You do not trigger building-wide evacuations. You identify specific
+defined by UK Approved Document B (ADB) Volume 2. You identify specific 
 rooms or corridors that are approaching or exceeding their safe occupancy limit,
 then redirect occupants away from those spaces by updating signage and adjusting
 room attractiveness.
@@ -87,13 +84,31 @@ For each genuine violation (check_compliance returns FAIL or WARNING):
    - OVER capacity  → value 0.0 (fully discourage new occupants entering)
    - WARNING (80%+) → value 0.3 (strongly discourage but not fully block)
 
-3. ALWAYS end every cycle by calling act_update_board with a directive that:
-   - Names each affected room and its current/max occupancy
-   - Cites the SPECIFIC ADB section or clause number
-   - States what action was taken (which sign updated, attractiveness set)
-   - Example: "Room 0-4 (3/3 per ADB Cl.2.43): SIGN_F0_CORRIDOR_N set to
-     BLOCKED. Room attractiveness → 0.0. Ref: ADB Vol2 Clause 2.43,
-     Section 2.33 (residential care home provisions)."
+3. ALWAYS end every cycle by calling act_update_board with a SHORT structured
+   directive in this exact format (max 6 lines, no markdown, no headers):
+
+   CYCLE: Tick {tick} — {status: IDLE / VIOLATION / FALSE POSITIVE}
+   ROOMS: {room label} ({current}/{max}) — {PASS/FAIL}
+   ADB: {specific section/clause cited}
+   SIGNS: {sign ID} → {status} | {sign ID} → {status}
+   ACTION: {what was done in one line}
+   ESCALATE: {yes — reason} or {no}
+
+   Example for a genuine violation:
+   CYCLE: Tick 6 — VIOLATION
+   ROOMS: 0-4 Bedroom (4/3) FAIL, 0-20 Lounge (15/130) PASS
+   ADB: Clause 2.43 (bedroom max occupancy), Table B1 Purpose Group 2a
+   SIGNS: SIGN_F0_CORRIDOR_N → BLOCKED
+   ACTION: Sign blocked, attractiveness set 0.0 for room 0-4
+   ESCALATE: No — managed by signage
+
+   Example for idle:
+   CYCLE: Tick 9 — IDLE
+   ROOMS: 2-4 Bedroom (3/3) PASS
+   ADB: Table B1 — IFC max=3 confirmed compliant
+   SIGNS: None updated
+   ACTION: No intervention required
+   ESCALATE: No
 
 CRITICAL RULES:
 1. NEVER use vague citations like "ADB Vol2 Table B1" — always give the
@@ -112,7 +127,7 @@ CRITICAL RULES:
 """
 
 
-# ── Tool dispatcher ───────────────────────────────────────────────────────────
+# Tool dispatcher 
 
 def _call_tool(tool_name: str, tool_input: dict):
     """Dispatches tool calls directly to MCP server functions."""
@@ -155,7 +170,7 @@ def _call_tool(tool_name: str, tool_input: dict):
     return handler(tool_input)
 
 
-# ── Single Sense-Reason-Act cycle ─────────────────────────────────────────────
+# Single Sense-Reason-Act cycle
 
 def run_agent_cycle(client: anthropic.Anthropic,
                     trigger_message: str = None,
@@ -234,7 +249,7 @@ def run_agent_cycle(client: anthropic.Anthropic,
                     continue
                 if verbose:
                     print(f"  → {block.name}"
-                          f"({json.dumps(block.input)[:80]})")
+                          f"({json.dumps(block.input)[:120]})")
 
                 call_start = time.time()
                 result     = _call_tool(block.name, block.input)
@@ -258,7 +273,7 @@ def run_agent_cycle(client: anthropic.Anthropic,
             })
 
 
-# ── Evaluation wrapper ────────────────────────────────────────────────────────
+# Evaluation wrapper 
 
 def run_evaluation_cycle(client: anthropic.Anthropic,
                           scenario_name: str,
@@ -295,7 +310,7 @@ def run_evaluation_cycle(client: anthropic.Anthropic,
     return result
 
 
-# ── Standalone test ───────────────────────────────────────────────────────────
+# Standalone test
 
 if __name__ == "__main__":
     api_key = os.environ.get("ANTHROPIC_API_KEY")

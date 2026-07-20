@@ -363,8 +363,9 @@ def run(total_ticks: int = 25,
                 "directive_excerpt": result["directive"][:200],
             })
             session_log["total_actions"] += result["signs_updated"]
-            for a in overs:
-                session_log["rooms_managed"].add(a["label"])
+            if result["signs_updated"] > 0:
+                for a in overs:
+                    session_log["rooms_managed"].add(a["label"])
 
             # Update board with agent directive (truncated by board.py)
             update_board(snapshot, result["directive"])
@@ -401,7 +402,7 @@ def run(total_ticks: int = 25,
     print(f"  Rooms managed    : {len(session_log['rooms_managed'])}")
     print(f"  ADB cited        : {adb_hits}/{n_cycles} cycles")
     print()
-    print("  Peter's criteria:")
+    print("  System's criteria:")
     print("  (1) Correct state   — floor colours + board updated every tick ✅")
     print("  (2) Safety maintained — confirmed violations turn floor RED ✅")
     print(f"  (3) Pre-emptive     — agent ran {n_cycles} cycles, "
@@ -439,8 +440,8 @@ if __name__ == "__main__":
                         help="Number of occupants (default 80)")
     parser.add_argument("--delay", type=float, default=2.0,
                         help="Seconds between ticks (default 2.0)")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed (default 42)")
+    parser.add_argument("--seed", type=int, default=16,
+                    help="Random seed (default 16)")
     parser.add_argument("--quiet", action="store_true",
                         help="Hide agent tool call details")
 

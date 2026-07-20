@@ -1,6 +1,5 @@
 # bim/signage.py
 # Updates evacuation sign Psets via GlobalId
-# Also feeds the new status back into the simulation's edge weights
 
 from bim.ifc_bridge import update_ifc_pset_properties
 from bim.bim_query import get_sign
@@ -22,7 +21,7 @@ def update_sign(sign_id: str, message: str, status: str,
     if "error" in sign:
         return sign
 
-    # Write to IFC via GlobalId (Peter's pattern)
+    # Write to IFC via GlobalId 
     result = update_ifc_pset_properties(
         sign["global_id"], "Pset_EvacuationSign",
         {
@@ -32,7 +31,7 @@ def update_sign(sign_id: str, message: str, status: str,
         }
     )
 
-    # Feed status back into simulation (key bidirectional step)
+    # Feed status back into simulation
     points_toward = sign.get("points_toward", "")
     if points_toward:
         _feed_back_to_simulation(points_toward, status)
@@ -72,7 +71,7 @@ def _feed_back_to_simulation(points_toward: str, status: str):
         if graph_label:
             update_sign_status(graph_label, status)
     except Exception:
-        pass  # simulation may not be running — silently skip
+        pass  
 
 
 def reset_all_signs() -> list:

@@ -58,7 +58,7 @@ def main():
     assert len(exits) == 4, "Should have 4 fire exits"
     print("  PASS")
 
-    # ── Step 3: Pset round-trip (Peter's pattern) ────────────────────────
+    # ── Step 3: Pset round-trip  ────────────────────────
     print("\n[3/5] Pset read/write (GlobalId pattern)...")
     lounge = next((s for s in SPACES.values() if s["long_name"]=="Lounge"), None)
     if not lounge:

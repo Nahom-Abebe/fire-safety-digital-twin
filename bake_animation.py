@@ -12,8 +12,8 @@
 # Run: python bake_animation.py
 # Run: python bake_animation.py --scenario TS-01
 # Run: python bake_animation.py --scenario TS-01 --drive --fps 12 --speed 0.08
-# Run: python bake_animation.py --jump 60   (jump to violation frame)
-# Run: python bake_animation.py --play      (replay without rebaking)
+# Run: python bake_animation.py --jump 60    (jump to violation frame)
+# Run: python bake_animation.py --play       (replay without rebaking)
 
 import sys, os, argparse, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -22,14 +22,10 @@ from bim.animation_baker import bake_animation
 from bim.viewport_utils import frame_view_on_objects
 from bim.ifc_bridge import test_connection, send_to_blender
 
-# ── Scenario definitions ──────────────────────────────────────────────────────
-# Each scenario specifies which room violates its ADB capacity and when.
-# violation_tick : tick at which the room's attractiveness drops
-# violation_room : graph label of the overcrowded room
-# These correspond to the evaluation scenarios in your report Section 3.6.3.
+# ── Synchronized Scenario Definitions ─────────────────────────────────────────
+# Aligned perfectly with tests/test_scenarios.py and fix_and_bake.py
 
 SCENARIOS = {
-
     "default": {
         "description"   : "Ground floor room 0-4 approaches capacity",
         "violation_tick": 5,
@@ -80,10 +76,26 @@ SCENARIOS = {
 }
 
 
-# ── Playback helpers ──────────────────────────────────────────────────────────
+# ── Viewport Shading Guard ───────────────────────────────────────────────────
+
+def ensure_material_shading():
+    """Forces Blender viewport into Material Preview to ensure colors/emissions render."""
+    send_to_blender("""
+import bpy
+for area in bpy.context.screen.areas:
+    if area.type == 'VIEW_3D':
+        for space in area.spaces:
+            if space.type == 'VIEW_3D':
+                space.shading.type = 'MATERIAL'
+        area.tag_redraw()
+""")
+
+
+# ── Playback Helpers ──────────────────────────────────────────────────────────
 
 def play_animation() -> dict:
     """Start Blender playback via socket — no spacebar needed."""
+    ensure_material_shading()
     return send_to_blender("""
 import bpy
 bpy.context.scene.frame_set(0)
@@ -92,16 +104,13 @@ print('Playback started')
 """)
 
 
-def drive_animation(total_frames: int, frames_per_tick: int,
-                    frame_delay: float = 0.08):
+def drive_animation(total_frames: int, frames_per_tick: int, frame_delay: float = 0.08):
     """
     Python-driven frame loop — most reliable playback method.
     Steps Blender through every frame at a controlled rate.
-    Bypasses Bonsai's spacebar interception completely.
-    Press Ctrl+C to stop early.
     """
-    print(f"\nDriving animation ({total_frames} frames "
-          f"at {frame_delay}s/frame)...")
+    ensure_material_shading()
+    print(f"\nDriving animation ({total_frames} frames at {frame_delay}s/frame)...")
     print("Press Ctrl+C to stop\n")
     try:
         for frame in range(0, total_frames + 1):
@@ -122,6 +131,7 @@ for area in bpy.context.screen.areas:
 
 def jump_to_frame(frame: int):
     """Jump Blender to a specific frame without rebaking."""
+    ensure_material_shading()
     print(f"Jumping to frame {frame}...")
     send_to_blender(f"""
 import bpy
@@ -134,7 +144,7 @@ print('At frame {frame}')
     print(f"Blender is now at frame {frame}")
 
 
-# ── Main bake function ────────────────────────────────────────────────────────
+# ── Main Bake Function ────────────────────────────────────────────────────────
 
 def main(scenario: str = "default",
          frames_per_tick: int = 24,
@@ -151,6 +161,9 @@ def main(scenario: str = "default",
         print("FAILED — open Blender, load IFC, start MCP server (N-panel)")
         return
     print("OK")
+
+    # Force view setup before execution
+    ensure_material_shading()
 
     # ── Load scenario ──────────────────────────────────────────────────
     sc = SCENARIOS.get(scenario, SCENARIOS["default"])
@@ -179,7 +192,7 @@ def main(scenario: str = "default",
         print(f"\nFAILED: {result}")
         return
 
-    total          = result["total_frames"]
+    total           = result["total_frames"]
     violation_frame = v_tick * frames_per_tick if v_tick < 999 else None
 
     # ── Frame viewport on markers ──────────────────────────────────────
@@ -208,12 +221,12 @@ def main(scenario: str = "default",
         print(f"  {play_result}")
         print()
         print("  If Blender is NOT playing, use:")
-        print("  python bake_animation.py --drive")
+        print("  python bake_animation.py --scenario " + scenario + " --drive")
         if violation_frame:
             print(f"  python bake_animation.py --jump {violation_frame}")
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Entry Point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
