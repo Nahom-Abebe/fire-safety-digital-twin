@@ -9,24 +9,31 @@
     {
       "tick": 1,
       "total_occ": 80,
-      "warnings": 0,
-      "over": 0,
-      "alerts": []
-    },
-    {
-      "tick": 2,
-      "total_occ": 80,
       "warnings": 2,
       "over": 0,
       "alerts": [
         {
-          "label": "1-16",
+          "label": "3-10",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
         },
         {
           "label": "3-14",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        }
+      ]
+    },
+    {
+      "tick": 2,
+      "total_occ": 80,
+      "warnings": 1,
+      "over": 0,
+      "alerts": [
+        {
+          "label": "0-11",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
@@ -43,25 +50,69 @@
     {
       "tick": 4,
       "total_occ": 80,
-      "warnings": 0,
-      "over": 0,
-      "alerts": []
+      "warnings": 2,
+      "over": 1,
+      "alerts": [
+        {
+          "label": "2-12",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "3-9",
+          "current": 4,
+          "max": 3,
+          "severity": "OVER"
+        },
+        {
+          "label": "3-11",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        }
+      ]
     },
     {
       "tick": 5,
-      "total_occ": 80,
-      "warnings": 0,
-      "over": 0,
-      "alerts": []
-    },
-    {
-      "tick": 6,
       "total_occ": 80,
       "warnings": 1,
       "over": 0,
       "alerts": [
         {
+          "label": "0-12",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        }
+      ]
+    },
+    {
+      "tick": 6,
+      "total_occ": 80,
+      "warnings": 3,
+      "over": 1,
+      "alerts": [
+        {
+          "label": "0-19",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "3-4",
+          "current": 4,
+          "max": 3,
+          "severity": "OVER"
+        },
+        {
           "label": "3-10",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "3-11",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
@@ -71,16 +122,9 @@
     {
       "tick": 7,
       "total_occ": 80,
-      "warnings": 1,
+      "warnings": 0,
       "over": 0,
-      "alerts": [
-        {
-          "label": "2-6",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        }
-      ]
+      "alerts": []
     },
     {
       "tick": 8,
@@ -89,13 +133,13 @@
       "over": 1,
       "alerts": [
         {
-          "label": "3-9",
+          "label": "3-12",
           "current": 4,
           "max": 3,
           "severity": "OVER"
         },
         {
-          "label": "3-12",
+          "label": "3-16",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
@@ -105,21 +149,14 @@
     {
       "tick": 9,
       "total_occ": 80,
-      "warnings": 1,
+      "warnings": 0,
       "over": 0,
-      "alerts": [
-        {
-          "label": "1-9",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        }
-      ]
+      "alerts": []
     },
     {
       "tick": 10,
       "total_occ": 80,
-      "warnings": 0,
+      "warnings": 1,
       "over": 1,
       "alerts": [
         {
@@ -127,43 +164,30 @@
           "current": 4,
           "max": 3,
           "severity": "OVER"
+        },
+        {
+          "label": "3-19",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
         }
       ]
     },
     {
       "tick": 11,
       "total_occ": 80,
-      "warnings": 2,
+      "warnings": 0,
       "over": 0,
-      "alerts": [
-        {
-          "label": "1-15",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        },
-        {
-          "label": "2-4",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        }
-      ]
+      "alerts": []
     },
     {
       "tick": 12,
       "total_occ": 80,
-      "warnings": 2,
+      "warnings": 1,
       "over": 0,
       "alerts": [
         {
-          "label": "1-9",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        },
-        {
-          "label": "3-13",
+          "label": "3-14",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
@@ -174,8 +198,15 @@
       "tick": 13,
       "total_occ": 80,
       "warnings": 0,
-      "over": 0,
-      "alerts": []
+      "over": 1,
+      "alerts": [
+        {
+          "label": "1-15",
+          "current": 4,
+          "max": 3,
+          "severity": "OVER"
+        }
+      ]
     },
     {
       "tick": 14,
@@ -187,23 +218,11 @@
     {
       "tick": 15,
       "total_occ": 80,
-      "warnings": 2,
-      "over": 1,
+      "warnings": 1,
+      "over": 0,
       "alerts": [
         {
-          "label": "3-12",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        },
-        {
-          "label": "3-14",
-          "current": 4,
-          "max": 3,
-          "severity": "OVER"
-        },
-        {
-          "label": "3-15",
+          "label": "3-8",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
@@ -214,73 +233,91 @@
   "agent_cycles": [
     {
       "tick": 3,
-      "latency_seconds": 15.867,
+      "latency_seconds": 18.161,
       "tool_count": 2,
       "signs_updated": 0,
       "adb_cited": false,
-      "directive_excerpt": "**CYCLE COMPLETE \u2014 TICK 3:**\n\nAll rooms are compliant with ADB occupancy limits. No signage updates, no attractiveness adjustments, and no escalation required. The system is operating nominally with 8"
+      "directive_excerpt": "**Cycle Complete \u2014 Tick 3**\n\nAll rooms are operating safely within their ADB-compliant occupancy limits. No violations detected. No action required."
+    },
+    {
+      "tick": 4,
+      "latency_seconds": 26.399,
+      "tool_count": 12,
+      "signs_updated": 1,
+      "adb_cited": true,
+      "directive_excerpt": "## Cycle Summary\n\n**VIOLATION DETECTED AND CONTAINED**\n\n- **Room 3-9 (Bedroom)**: 4/3 occupants \u2014 **FAIL** against ADB Vol2 Table B1 Purpose Group 2a. This is a genuine over-capacity breach.\n\n- **Room"
     },
     {
       "tick": 6,
-      "latency_seconds": 16.769,
-      "tool_count": 5,
-      "signs_updated": 0,
+      "latency_seconds": 26.012,
+      "tool_count": 14,
+      "signs_updated": 1,
       "adb_cited": true,
-      "directive_excerpt": "## Sense-Reason-Act Cycle Complete \u2014 Tick 6\n\n**Summary:**\n- **Alert:** Room 3-10 (Bedroom) flagged at 3/3 = 100% capacity (WARNING severity)\n- **Verification:** `check_compliance` confirms **PASS** \u2014 "
+      "directive_excerpt": "## **Tick 6 Cycle Complete**\n\n### **Summary**\n\n\u2705 **One genuine violation confirmed:**\n- **Room 3-4 (Bedroom, F3)**: 4/3 occupants \u2014 **EXCEEDS ADB Clause 2.43**\n  - Action: **SIGN_F3_CORRIDOR blocked**"
     },
     {
       "tick": 8,
-      "latency_seconds": 16.723,
+      "latency_seconds": 20.37,
       "tool_count": 11,
       "signs_updated": 1,
       "adb_cited": true,
-      "directive_excerpt": "## SENSE-REASON-ACT CYCLE COMPLETE \u2014 Tick 8\n\n**SUMMARY:**\n\n\u2713 **Room 3-9 (Bedroom)** \u2014 4/3 occupants \u2192 **FAIL** (genuine violation)\n  - IFC max occupancy: 3 per bedroom\n  - ADB Clause 2.43 specifies: \""
+      "directive_excerpt": "---\n\n## **CYCLE 8 COMPLETE**\n\n\u2705 **VIOLATION IDENTIFIED & ACTED UPON:**\n\n- **Room 3-12 (Bedroom)**: 4 occupants vs. max 3 \u2192 **FAIL** per ADB Table B1 Purpose Group 2a\n  - **Action**: SIGN_F3_CORRIDOR s"
     },
     {
       "tick": 9,
-      "latency_seconds": 16.68,
-      "tool_count": 5,
+      "latency_seconds": 6.901,
+      "tool_count": 2,
       "signs_updated": 0,
-      "adb_cited": true,
-      "directive_excerpt": "---\n\n## SUMMARY\n\n**Tick 9 result: FALSE POSITIVE \u2014 No action required**\n\nRoom 1-9 (Bedroom, F1) is flagged at 3/3 occupancy by the graph simulation, but the IFC model's deterministic compliance check "
+      "adb_cited": false,
+      "directive_excerpt": "**RESULT**\n\n**Tick 9 \u2014 System IDLE**\n\n\u2713 All rooms within safe occupancy limits  \n\u2713 No violations detected  \n\u2713 No sign updates required  \n\u2713 No room attractiveness adjustments needed  \n\nBoard updated. S"
     },
     {
       "tick": 10,
-      "latency_seconds": 22.482,
-      "tool_count": 9,
-      "signs_updated": 2,
+      "latency_seconds": 16.563,
+      "tool_count": 11,
+      "signs_updated": 1,
       "adb_cited": true,
-      "directive_excerpt": "## Summary \u2014 Tick 10 Cycle Complete\n\n**VIOLATION DETECTED & MANAGED**\n\n- **Room 3-16 (Bedroom, Floor F3):** 4 occupants against IFC max of 3 \u2014 **OVER CAPACITY**\n- **ADB Basis:** Clause 2.43 states \"Be"
+      "directive_excerpt": "---\n\n## **CYCLE SUMMARY: Tick 10**\n\n**STATUS:** VIOLATION DETECTED & MANAGED\n\n**FINDINGS:**\n- **Room 3-16 (Bedroom)**: 4 occupants vs. max 3 \u2192 **FAIL** \u2014 genuine violation\n- **Room 3-19 (Bedroom)**: 3"
     },
     {
       "tick": 12,
-      "latency_seconds": 20.932,
-      "tool_count": 10,
+      "latency_seconds": 13.723,
+      "tool_count": 5,
       "signs_updated": 0,
       "adb_cited": true,
-      "directive_excerpt": "---\n\n## **CYCLE COMPLETE \u2014 Tick 12**\n\n**REASONING SUMMARY:**\n\nThe two WARNING-level alerts (rooms 1-9 and 3-13 at 3/3 occupancy) are **false positives** generated by the graph's 80% threshold logic. T"
+      "directive_excerpt": "---\n\n## **CYCLE SUMMARY \u2014 Tick 12**\n\n**Finding:** Room 3-14 (Bedroom, F3) is at 3/3 occupancy, which triggered a graph-level WARNING alert. However, `check_compliance` against the IFC model confirms *"
+    },
+    {
+      "tick": 13,
+      "latency_seconds": 15.978,
+      "tool_count": 8,
+      "signs_updated": 1,
+      "adb_cited": true,
+      "directive_excerpt": "---\n\n## **CYCLE SUMMARY: Tick 13**\n\n\u2705 **ONE GENUINE VIOLATION DETECTED & MANAGED**\n\n**Room 1-15 (Bedroom) OVER CAPACITY:**\n- **Current:** 4 occupants | **Max:** 3\n- **Status:** FAIL (check_compliance "
     },
     {
       "tick": 15,
-      "latency_seconds": 19.7,
-      "tool_count": 13,
-      "signs_updated": 1,
+      "latency_seconds": 16.364,
+      "tool_count": 6,
+      "signs_updated": 0,
       "adb_cited": true,
-      "directive_excerpt": "## **CYCLE TICK 15 COMPLETE**\n\n**SENSE:** 3 alerts on F3 Third Floor (1 OVER, 2 WARNING)\n\n**REASON:**\n- Room 3-14: 4 occupants vs. IFC max 3 \u2192 **FAIL** (genuine violation of ADB Clause 2.43)\n- Room 3-"
+      "directive_excerpt": "## Summary\n\n**Tick 15 \u2014 False Positive**\n\nThe WARNING alert for room 3-8 (Bedroom, 3/3 occupancy) has been evaluated:\n\n- **Sense:** Graph reported WARNING at 80%+ threshold  \n- **Reason:** check_compl"
     }
   ],
-  "total_actions": 4,
+  "total_actions": 5,
   "rooms_managed": [
-    "3-16",
-    "3-14",
-    "3-9"
+    "3-4",
+    "1-15",
+    "3-9",
+    "3-12",
+    "3-16"
   ],
-  "start_time": "2026-07-20 13:59:16",
-  "end_time": "2026-07-20 14:02:00",
+  "start_time": "2026-07-21 11:59:09",
+  "end_time": "2026-07-21 12:02:25",
   "summary": {
-    "n_cycles": 7,
-    "mean_latency": 18.5,
-    "total_actions": 4,
-    "adb_cited": "6/7"
+    "n_cycles": 9,
+    "mean_latency": 17.8,
+    "total_actions": 5,
+    "adb_cited": "7/9"
   }
 }

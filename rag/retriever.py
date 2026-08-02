@@ -27,6 +27,42 @@ _client     = None
 _collection = None
 _model      = None
 
+_REGULATION_CACHE = {}
+
+def retrieve_regulations(query: str, n: int = 3) -> list:
+    """
+    Retrieves relevant ADB Vol2 passages via RAG.
+    Results are cached per query for the session duration —
+    the ADB document does not change between ticks so
+    repeated identical queries return the same passages.
+    """
+    _init()
+
+    # Check cache first
+    cache_key = f"{query}|{n}"
+    if cache_key in _REGULATION_CACHE:
+        return _REGULATION_CACHE[cache_key]
+
+    # Cache miss — run the vector search
+    embedding = _model.encode([query]).tolist()
+    results   = _collection.query(
+        query_embeddings=embedding,
+        n_results=n,
+        include=["documents", "metadatas", "distances"]
+    )
+    passages = [
+        {
+            "text"        : results["documents"][0][i],
+            "section_hint": results["metadatas"][0][i].get(
+                "section_hint", "ADB Vol2"),
+            "distance"    : round(results["distances"][0][i], 4),
+        }
+        for i in range(len(results["documents"][0]))
+    ]
+
+    # Store in cache
+    _REGULATION_CACHE[cache_key] = passages
+    return passages
 
 def _init():
     global _client, _collection, _model

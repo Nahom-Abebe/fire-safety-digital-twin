@@ -335,11 +335,21 @@ def run(total_ticks: int = 25,
                     if fl:
                         confirmed_red_floors.add(fl)
 
-                # Refresh floor colours immediately if a new violation was confirmed
-                if confirmed_red_floors != last_rendered_red_floors:
-                    _update_floor_colours(confirmed_red_floors)
-                    last_rendered_red_floors = set(confirmed_red_floors)
-                    print(f"  Floor(s) confirmed RED: {confirmed_red_floors}")
+                # Refresh floor colours with newly confirmed violations
+                _update_floor_colours(confirmed_red_floors)
+                print(f"  Floor(s) confirmed RED: {confirmed_red_floors}")
+
+                # Move some cones to assembly point
+                try:
+                    from bim.assembly_point import move_cones_to_assembly
+                    import random
+                    rng          = random.Random(tick)
+                    redirect_ids = rng.sample(range(80), 5)
+                    move_cones_to_assembly(redirect_ids)
+                    print(f"  {len(redirect_ids)} occupants redirected "
+                          f"to assembly point")
+                except Exception as e:
+                    print(f"  Assembly point redirect skipped: {e}")
 
             # ── Log ───────────────────────────────────────────────────────
             session_log["agent_cycles"].append({
