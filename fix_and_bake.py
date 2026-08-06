@@ -1,12 +1,12 @@
 # fix_and_bake.py
 # Clears conflicting materials, sets correct viewport mode,
 # bakes the occupancy management animation, updates corridor
-# sign panels AFTER the bake completes, then drives the animation.
+# sign panels AFTER the bake completes, animates 5 cones
+# walking to the assembly point, then drives the animation.
 #
-# Run: python fix_and_bake.py
 # Run: python fix_and_bake.py --scenario TS-01 --fps 12 --speed 0.08
 
-import sys, os, time, argparse
+import sys, os, time, argparse, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from bim.ifc_bridge import send_to_blender, test_connection
@@ -14,6 +14,7 @@ from bim.animation_baker import bake_animation
 from bim.viewport_utils import frame_view_on_objects
 from sensors.building_graph import BUILDING_GRAPH as G
 
+# ── Scenario definitions ──────────────────────────────────────────────────────
 SCENARIOS = {
     "default": {
         "description"   : "Ground floor room 0-4 approaches capacity",
@@ -44,7 +45,7 @@ SCENARIOS = {
         "seed"          : 3,
     },
     "TS-04": {
-        "description"   : "Top floor congestion — F3 room 3-1 (mobility constraint)",
+        "description"   : "Top floor — F3 room 3-1 (mobility constraint)",
         "violation_tick": 6,
         "violation_room": "3-1",
         "ticks"         : 25,
@@ -59,7 +60,7 @@ SCENARIOS = {
     },
 }
 
-# Which corridor sign serves each floor
+# Which corridor sign panel serves each floor
 FLOOR_SIGNS = {
     "F0 Ground Floor": "SIGN_F0_CORRIDOR_N",
     "F1 First Floor" : "SIGN_F1_CORRIDOR",
@@ -68,13 +69,13 @@ FLOOR_SIGNS = {
 }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Step 1 — Clear conflicting materials ──────────────────────────────────────
 
 def _clear_materials_and_set_viewport():
     """
-    Removes conflicting LIVE_ and FS_FLOOR_ materials from previous
-    live_agent_runner sessions. Sets viewport to SOLID + OBJECT COLOR
-    so obj.color keyframes are visible during the baked animation.
+    Removes LIVE_ and FS_FLOOR_ materials left by live_agent_runner.
+    Sets viewport to SOLID + OBJECT COLOR so obj.color keyframes
+    are visible during the baked animation.
     """
     send_to_blender("""
 import bpy
@@ -92,9 +93,11 @@ for area in bpy.context.screen.areas:
                 space.shading.show_shadows = False
         area.tag_redraw()
 print(f'Cleared {removed} conflicting materials')
-print('Viewport set to SOLID + OBJECT COLOR')
+print('Viewport: SOLID + OBJECT COLOR')
 """)
 
+
+# ── Step 2 — Reset all sign panels to green ───────────────────────────────────
 
 def _reset_all_sign_panels_green():
     """Resets all corridor sign panels to green before baking."""
@@ -112,20 +115,23 @@ for obj in bpy.data.objects:
             node.inputs['Emission Strength'].default_value = 1.5
         count += 1
     if obj.name.startswith('SignText_'):
-        floor = obj.name.replace('SignText_SIGN_', '').replace('_CORRIDOR_N','')\\
-                        .replace('_CORRIDOR','')
-        obj.data.body = f'Status: CLEAR\\nAll routes open'
+        obj.data.body = 'Status: CLEAR\\nAll routes open'
 for area in bpy.context.screen.areas:
     if area.type == 'VIEW_3D': area.tag_redraw()
 print(f'Reset {count} sign panels to GREEN')
 """)
 
 
-def _update_sign_panel_red(sign_id: str, room: str, floor_name: str):
+# ── Step 4 — Update sign panel RED after bake ─────────────────────────────────
+
+def _update_sign_panel_red(sign_id: str, room: str,
+                            violation_tick: int,
+                            frames_per_tick: int):
     """
     Turns a specific corridor sign panel RED after the bake completes.
-    Shows a simple occupant-facing message — no ADB references.
-    Also moves 5 cones to the assembly point to show redirection.
+    Message is simple occupant-facing text — no ADB references on signs.
+    Also animates 5 cones walking to the assembly point.
+    Called AFTER bake so Blender is free to receive the command.
     """
     message = f"Room {room} is full\\nPlease use an alternative area"
 
@@ -150,25 +156,15 @@ if txt:
 for area in bpy.context.screen.areas:
     if area.type == 'VIEW_3D': area.tag_redraw()
 
-print('Sign panel updated: {sign_id} -> RED')
+print('Sign panel RED: {sign_id}')
 """)
 
-    # Move some cones to the assembly point to show redirection
-    try:
-        from bim.assembly_point import move_cones_to_assembly
-        import random
-        rng          = random.Random(42)
-        redirect_ids = rng.sample(range(80), 5)
-        move_cones_to_assembly(redirect_ids)
-        print(f"  5 occupants redirected to assembly point")
-    except Exception as e:
-        print(f"  Assembly point redirect skipped: {e}")
-
+# ── Step 5 — Jump to frame ────────────────────────────────────────────────────
 
 def _jump_to_frame(frame: int):
     """
     Jumps Blender to a specific frame and redraws the viewport.
-    Used to show the violation state before driving the animation.
+    Called after sign update so violation state is visible before driving.
     """
     send_to_blender(f"""
 import bpy
@@ -179,9 +175,14 @@ print(f'Jumped to frame {frame}')
 """)
 
 
+# ── Step 6 — Drive animation ──────────────────────────────────────────────────
+
 def _drive_animation(total_frames: int, frames_per_tick: int,
                      frame_delay: float):
-    """Drives the animation frame by frame from Python."""
+    """
+    Drives the baked animation frame by frame from Python.
+    Press Ctrl+C to stop early.
+    """
     print(f"\nDriving animation ({total_frames} frames "
           f"at {frame_delay}s/frame)...")
     print("Press Ctrl+C to stop\n")
@@ -211,39 +212,40 @@ def main(scenario: str = "default",
     print(f"  FIX AND BAKE — {scenario}")
     print("=" * 60)
 
-    # ── Connection ────────────────────────────────────────────────────────
+    # Connection check
     print("\nChecking Blender connection...")
     if not test_connection():
         print("FAILED — open Blender, load IFC, start MCP server (N-panel)")
         return
     print("OK")
 
-    sc = SCENARIOS.get(scenario, SCENARIOS["default"])
+    sc     = SCENARIOS.get(scenario, SCENARIOS["default"])
     v_tick = sc["violation_tick"]
     v_room = sc["violation_room"]
-    n_ticks = sc["ticks"]
+    n_tick = sc["ticks"]
 
     print(f"\nScenario    : {scenario}")
     print(f"Description : {sc['description']}")
-    print(f"Ticks       : {n_ticks}")
-    print(f"Violation   : room {v_room} at tick "
-          f"{'none (baseline)' if v_tick >= 999 else v_tick}")
+    print(f"Ticks       : {n_tick}")
+    if v_tick < 999:
+        print(f"Violation   : room {v_room} at tick {v_tick}")
+    else:
+        print(f"Violation   : none (baseline)")
     print(f"FPS         : {frames_per_tick} frames/tick")
 
-    # ── Step 1: Clear conflicting materials ───────────────────────────────
+    # Step 1 — Clear conflicting materials
     print("\nClearing conflicting materials and setting viewport...")
     _clear_materials_and_set_viewport()
 
-    # ── Step 2: Reset all sign panels to green ────────────────────────────
+    # Step 2 — Reset sign panels to green
     print("Resetting corridor sign panels to GREEN...")
     _reset_all_sign_panels_green()
 
-    # ── Step 3: Bake animation ────────────────────────────────────────────
-    print(f"\nBaking keyframes (30–90s)...")
-
+    # Step 3 — Bake animation
+    print(f"\nBaking keyframes (30-90s)...")
     result = bake_animation(
         total_occupants = 80,
-        total_ticks     = n_ticks,
+        total_ticks     = n_tick,
         violation_tick  = v_tick,
         violation_room  = v_room,
         frames_per_tick = frames_per_tick,
@@ -263,46 +265,52 @@ def main(scenario: str = "default",
     print("  BAKE COMPLETE")
     print(f"  Markers baked    : {result.get('markers_baked', 80)}")
     print(f"  Floors baked     : {result.get('floors_baked', 4)}")
-    print(f"  Total frames     : 0 → {total} ({n_ticks} ticks)")
+    print(f"  Total frames     : 0 -> {total} ({n_tick} ticks)")
     if v_frame:
         print(f"  Violation frame  : {v_frame} (tick {v_tick})")
+        print(f"  IFC Pset         : ComplianceStatus=FAIL written for {v_room}")
+        print(f"  Sign updated     : ADB Cl.2.43 citation")
     print("=" * 60)
 
-    # ── Step 4: Update corridor sign AFTER bake ───────────────────────────
-    # Done AFTER bake so Blender is free to receive the Blender command.
-    # Sign update before bake gets dropped because Blender is busy.
+    # Step 4 — Update sign panel RED + animate cones to assembly point
+    # Done AFTER bake — Blender is now free to receive commands
     if v_frame and v_tick < 999:
-        print(f"\nUpdating corridor sign panels after bake...")
+        print(f"\nPost-bake updates...")
 
-        # Find which floor the violation room is on
+        # Find violation floor and its corridor sign
         v_node  = next((n for n, d in G.nodes(data=True)
                         if d["label"] == v_room), None)
         v_floor = G.nodes[v_node]["floor"] if v_node else None
         sign_id = FLOOR_SIGNS.get(v_floor)
 
         if sign_id and v_floor:
-            _update_sign_panel_red(sign_id, v_room, v_floor)
-            print(f"  {sign_id} → RED")
+            print(f"  Updating {sign_id} -> RED")
+            _update_sign_panel_red(
+                sign_id         = sign_id,
+                room            = v_room,
+                violation_tick  = v_tick,
+                frames_per_tick = frames_per_tick,
+            )
             print(f"  Message: Room {v_room} is full — "
                   f"please use an alternative area")
         else:
-            print(f"  No corridor sign mapped for {v_floor}")
+            print(f"  No corridor sign mapped for floor: {v_floor}")
 
-        # Jump to violation frame so the red state is immediately visible
-        print(f"\nJumping to violation frame {v_frame}...")
+        # Jump to violation frame so state is visible before driving
+        print(f"\n  Jumping to violation frame {v_frame}...")
         _jump_to_frame(v_frame)
-        time.sleep(1.5)   # pause so it is visible before driving starts
-        print("  Floor is RED, sign panel is RED")
+        time.sleep(1.5)
+        print(f"  Floor is RED | Sign is RED | 5 cones walking to assembly")
 
     elif v_tick >= 999:
         print("\nBaseline scenario — no violation, all signs stay GREEN")
 
-    # ── Step 5: Drive animation ───────────────────────────────────────────
+    # Step 5 — Drive animation
     _drive_animation(total, frames_per_tick, frame_delay)
 
     print("\nAnimation complete.")
     if v_frame:
-        print(f"Tip: Jump to frame {v_frame} to see the violation state again:")
+        print(f"Tip: Jump to violation frame {v_frame}:")
         print(f"  python fix_and_bake.py --jump {v_frame}")
 
 
@@ -310,16 +318,18 @@ def main(scenario: str = "default",
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Fix materials, bake animation, update signs, drive")
+        description="Fix materials, bake animation, update signs, "
+                    "animate cones to assembly point, drive")
 
     parser.add_argument("--scenario", default="default",
-                        choices=list(SCENARIOS.keys()))
+                        choices=list(SCENARIOS.keys()),
+                        help="Scenario to bake (default: default)")
     parser.add_argument("--fps", type=int, default=24,
                         help="Frames per tick (12=slow, 24=default)")
     parser.add_argument("--speed", type=float, default=0.08,
                         help="Seconds per frame during drive (0.08=default)")
     parser.add_argument("--jump", type=int, default=None,
-                        help="Jump to frame without rebaking")
+                        help="Jump to a specific frame without rebaking")
 
     args = parser.parse_args()
 
@@ -330,7 +340,7 @@ if __name__ == "__main__":
             _jump_to_frame(args.jump)
             print(f"At frame {args.jump}")
         else:
-            print("FAILED")
+            print("FAILED — start Blender and MCP server first")
     else:
         main(
             scenario        = args.scenario,

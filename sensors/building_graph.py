@@ -1,7 +1,7 @@
 # sensors/building_graph.py
 # Building topology derived from BuildingGraphHosp.html (Peter Lawrence)
-# Nodes: rooms, corridors, stairs, exits
-# Edges: doors (weight=1), stairs (weight=20)
+# Nodes: rooms, corridors, stairs, exits, assembly
+# Edges: doors (weight=1), stairs (weight=20), outdoor (weight=10)
 
 import networkx as nx
 
@@ -118,10 +118,13 @@ NODES = [
     (103,"EXIT-2","F0 Ground Floor","exit",0.0),
     (104,"EXIT-3","F0 Ground Floor","exit",0.0),
     (105,"EXIT-4","F0 Ground Floor","exit",0.0),
+    # Assembly Area — ultimate evacuation destination
+    (999,"ASSEMBLY","Exterior","assembly",500.0),
 ]
 
 EXIT_IDS  = {102, 103, 104, 105}
 STAIR_IDS = {91, 92, 93, 94, 101}
+ASSEMBLY_ID = 999
 
 # ── Edges ─────────────────────────────────────────────────────────────────────
 DOOR_EDGES = [
@@ -158,6 +161,11 @@ STAIR_EDGES = [
     (97,98),(98,99),(99,100),  # Secondary stairwell lobbies
 ]
 
+OUTDOOR_EDGES = [
+    # Connect ground floor exits to the assembly point
+    (102, 999), (103, 999), (104, 999), (105, 999)
+]
+
 ADB_M2_PER_PERSON = 6.0
 
 
@@ -172,6 +180,8 @@ def build_graph() -> nx.Graph:
         G.add_edge(u, v, weight=1, edge_type="door")
     for u, v in STAIR_EDGES:
         G.add_edge(u, v, weight=20, edge_type="stair")
+    for u, v in OUTDOOR_EDGES:
+        G.add_edge(u, v, weight=10, edge_type="outdoor")
     return G
 
 
@@ -182,23 +192,22 @@ def get_max_occupancy(node_id: int) -> int:
     area = BUILDING_GRAPH.nodes[node_id].get("area_m2", 0)
     return max(3, int(area / ADB_M2_PER_PERSON))
 
+
 def get_exit_path(node_id: int) -> dict:
-    best_path, best_len = None, float("inf")
-    for eid in EXIT_IDS:
-        try:
-            path = nx.shortest_path(BUILDING_GRAPH, node_id, eid, weight="weight")
-            length = nx.shortest_path_length(BUILDING_GRAPH, node_id, eid, weight="weight")
-            if length < best_len:
-                best_len, best_path = length, path
-        except nx.NetworkXNoPath:
-            continue
-    if not best_path:
-        return {"error": f"No exit path from {node_id}"}
+    """
+    Finds the shortest path from the given node to the Assembly Point (999).
+    """
+    try:
+        path = nx.shortest_path(BUILDING_GRAPH, node_id, ASSEMBLY_ID, weight="weight")
+        length = nx.shortest_path_length(BUILDING_GRAPH, node_id, ASSEMBLY_ID, weight="weight")
+    except nx.NetworkXNoPath:
+        return {"error": f"No path to assembly from {node_id}"}
+    
     return {
         "from_label" : BUILDING_GRAPH.nodes[node_id]["label"],
-        "exit_node"  : best_path[-1],
-        "path_labels": [BUILDING_GRAPH.nodes[n]["label"] for n in best_path],
-        "path_weight": best_len,
+        "exit_node"  : ASSEMBLY_ID,
+        "path_labels": [BUILDING_GRAPH.nodes[n]["label"] for n in path],
+        "path_weight": length,
     }
 
 

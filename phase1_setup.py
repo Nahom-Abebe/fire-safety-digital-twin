@@ -145,6 +145,16 @@ def main():
         print(f"  Location: {ap_result.get('location')}")
     except Exception as e:
         print(f"  WARNING: {e}")
+
+    # ── Step 9: Manager panel ─────────────────────────────────────────────
+    print("\n[9/9] Building manager panel...")
+    try:
+        from bim.manager_panel import install_manager_panel
+        install_manager_panel()
+        print("  Panel registered — N-panel -> 'Fire Safety' tab")
+        print("  Red ESCALATE button redirects all occupants to assembly")
+    except Exception as e:
+        print(f"  WARNING: {e}")
         
     # ── Summary ───────────────────────────────────────────────────────────
     print("\n" + "=" * 55)

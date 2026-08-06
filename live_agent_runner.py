@@ -334,22 +334,26 @@ def run(total_ticks: int = 25,
                     fl = _LABEL_TO_FLOOR.get(a["label"])
                     if fl:
                         confirmed_red_floors.add(fl)
-
-                # Refresh floor colours with newly confirmed violations
                 _update_floor_colours(confirmed_red_floors)
                 print(f"  Floor(s) confirmed RED: {confirmed_red_floors}")
 
-                # Move some cones to assembly point
+                # Cones in violation room respond to sign update
+                # by redirecting toward nearest exit
                 try:
-                    from bim.assembly_point import move_cones_to_assembly
-                    import random
-                    rng          = random.Random(tick)
-                    redirect_ids = rng.sample(range(80), 5)
-                    move_cones_to_assembly(redirect_ids)
-                    print(f"  {len(redirect_ids)} occupants redirected "
-                          f"to assembly point")
+                    from bim.assembly_point import redirect_cones_via_sign
+                    from bim.room_geometry import load_room_centroids
+                    centroids = load_room_centroids()
+                    for a in overs:
+                        if result["signs_updated"] > 0:
+                            redirect_cones_via_sign(
+                                affected_floor  = _LABEL_TO_FLOOR.get(a["label"], ""),
+                                violation_room  = a["label"],
+                                centroids       = centroids,
+                                snapshot        = snapshot
+                            )
+                            print(f"  Cones in {a['label']} redirecting to exit")
                 except Exception as e:
-                    print(f"  Assembly point redirect skipped: {e}")
+                    print(f"  Sign response skipped: {e}")
 
             # ── Log ───────────────────────────────────────────────────────
             session_log["agent_cycles"].append({

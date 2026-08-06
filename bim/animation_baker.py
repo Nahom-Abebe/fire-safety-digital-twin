@@ -1,13 +1,5 @@
 # bim/animation_baker.py
 # Bakes per-agent occupancy management timeline into Blender keyframes.
-#
-# Fixes applied: 
-# 1. Floor colour logic utilizes the violation event matrix and ignores initial 
-#    warm-up clustering noise by gating checking behind the scenario trigger tick.
-# 2. Agent occupant cones are similarly gated, keeping them uniformly blue until 
-#    the official scenario event occurs.
-# 3. Viewport optimization builds dynamic node trees using the 'Object Info' node 
-#    to cleanly render real-time color transitions natively in MATERIAL Preview mode.
 
 import json, os, random
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -35,6 +27,13 @@ FLOOR_ORDER = [
     "F2 Second Floor",
     "F3 Third Floor",
 ]
+
+FLOOR_SIGNS = {
+    "F0 Ground Floor": "SIGN_F0_CORRIDOR_N",
+    "F1 First Floor" : "SIGN_F1_CORRIDOR",
+    "F2 Second Floor": "SIGN_F2_CORRIDOR",
+    "F3 Third Floor" : "SIGN_F3_CORRIDOR",
+}
 
 SKIP_PREFIXES = (
     'IfcFurnishing', 'IfcBuildingElementProxy', 'IfcFlowTerminal',
@@ -89,20 +88,13 @@ def _make_resolver(centroids):
 def _build_floor_colour_timeline(timeline: list,
                                  frames_per_tick: int,
                                  violation_room: str) -> dict:
-    """
-    Floor colour logic with monitoring window:
-      GREEN = normal operation
-      RED   = violation detected (stays red for MONITOR_TICKS after detection)
-      GREEN = monitoring window expired, system confirms resolved
-    """
+    """Floor colour logic gated behind scenario trigger tick."""
     G = BUILDING_GRAPH
     label_to_floor  = {d["label"]: d["floor"] for _, d in G.nodes(data=True)}
     violation_floor = label_to_floor.get(violation_room, "")
 
-    # How many ticks to keep floor RED after violation triggers
     MONITOR_TICKS = 8
 
-    # Find which tick the violation first triggers
     violation_start_tick = None
     for record in timeline:
         if record["violation"] is not None:
@@ -116,7 +108,6 @@ def _build_floor_colour_timeline(timeline: list,
         frame  = tick * frames_per_tick
         alerts = record["snapshot"].get("alerts", [])
 
-        # Floors with genuine OVER alerts — filtered to ignore warm-up noise
         over_floors = set()
         if violation_start_tick is not None and tick >= violation_start_tick:
             for a in alerts:
@@ -125,7 +116,6 @@ def _build_floor_colour_timeline(timeline: list,
                     if fl:
                         over_floors.add(fl)
 
-        # Is the monitoring window still active?
         in_monitor_window = (
             violation_start_tick is not None and
             tick >= violation_start_tick and
@@ -134,13 +124,10 @@ def _build_floor_colour_timeline(timeline: list,
 
         for floor_name in FLOOR_COLLECTIONS:
             if in_monitor_window and floor_name == violation_floor:
-                # Monitoring window active — RED
                 r, g, b = 0.90, 0.05, 0.05
             elif floor_name in over_floors:
-                # Genuine overcrowding — RED
                 r, g, b = 0.90, 0.05, 0.05
             else:
-                # Compliant or resolved — GREEN
                 r, g, b = 0.05, 0.70, 0.15
 
             floor_keys[floor_name].append((frame, r, g, b))
@@ -148,9 +135,56 @@ def _build_floor_colour_timeline(timeline: list,
     return floor_keys
 
 
+def _build_sign_states_timeline(timeline: list, violation_room: str) -> list:
+    """Generates per-tick sign text payloads for corridor displays."""
+    G = BUILDING_GRAPH
+    label_to_floor  = {d["label"]: d["floor"] for _, d in G.nodes(data=True)}
+    violation_floor = label_to_floor.get(violation_room, "")
+
+    violation_start_tick = None
+    for record in timeline:
+        if record["violation"] is not None:
+            violation_start_tick = record["tick"]
+            break
+
+    MONITOR_TICKS = 8
+    sign_timeline = []
+
+    for record in timeline:
+        tick   = record["tick"]
+        alerts = record["snapshot"].get("alerts", [])
+
+        in_monitor = (
+            violation_start_tick is not None and
+            tick >= violation_start_tick and
+            tick < violation_start_tick + MONITOR_TICKS
+        )
+
+        over_floors = set()
+        if violation_start_tick is not None and tick >= violation_start_tick:
+            for a in alerts:
+                if a.get("severity") == "OVER":
+                    fl = label_to_floor.get(a.get("label", ""))
+                    if fl:
+                        over_floors.add(fl)
+
+        frame_signs = {}
+        for fl_name, sign_id in FLOOR_SIGNS.items():
+            if (in_monitor and fl_name == violation_floor) or fl_name in over_floors:
+                frame_signs[sign_id] = (
+                    f"Room {violation_room} at capacity — "
+                    f"please use alternative areas (ADB Cl.2.43)"
+                )
+            else:
+                frame_signs[sign_id] = f"{fl_name} — Occupancy Within Limits"
+        sign_timeline.append(frame_signs)
+
+    return sign_timeline
+
+
 def _build_board_text(snap: dict, violation: dict,
-                       violation_room: str) -> str:
-    """Board text for one tick — occupancy management language, no evacuation."""
+                      violation_room: str) -> str:
+    """Board text for one tick."""
     lines = [
         "FIRE SAFETY DIGITAL TWIN",
         f"Tick: {snap['tick']}",
@@ -211,14 +245,6 @@ def _write_compliance_pset(violation_room: str):
         return {"error": str(e)}
 
 
-FLOOR_SIGNS = {
-    "F0 Ground Floor": "SIGN_F0_CORRIDOR_N",
-    "F1 First Floor" : "SIGN_F1_CORRIDOR",
-    "F2 Second Floor": "SIGN_F2_CORRIDOR",
-    "F3 Third Floor" : "SIGN_F3_CORRIDOR",
-}
-
-
 def _update_signs_for_violation(violation_room: str, violation_floor: str):
     """Updates corridor sign for affected floor with ADB-cited message."""
     sign_id = FLOOR_SIGNS.get(violation_floor)
@@ -236,14 +262,12 @@ def _update_signs_for_violation(violation_room: str, violation_floor: str):
 # ── Main bake function ────────────────────────────────────────────────────────
 
 def bake_animation(total_occupants: int = 80,
-                    total_ticks: int = 25,
-                    violation_tick: int = 5,
-                    violation_room: str = "0-4",
-                    frames_per_tick: int = 24,
-                    seed: int = 42) -> dict:
-    """
-    Full occupancy management animation bake.
-    """
+                   total_ticks: int = 25,
+                   violation_tick: int = 5,
+                   violation_room: str = "0-4",
+                   frames_per_tick: int = 24,
+                   seed: int = 42) -> dict:
+    """Full occupancy management animation bake."""
     centroids = load_room_centroids()
     resolve   = _make_resolver(centroids)
 
@@ -262,7 +286,6 @@ def bake_animation(total_occupants: int = 80,
     label_to_floor = {d["label"]: d["floor"] for _, d in G.nodes(data=True)}
     violation_floor = label_to_floor.get(violation_room, "")
 
-    # Find which tick the violation first triggers globally
     violation_start_tick = None
     for record in timeline:
         if record["violation"] is not None:
@@ -283,11 +306,9 @@ def bake_animation(total_occupants: int = 80,
         frame     = tick * frames_per_tick
         alerts    = record["snapshot"].get("alerts", [])
 
-        # Track active violation zones for this specific frame
         over_rooms = set()
         over_floors = set()
         
-        # Gated to isolate tracking and prevent initial warm-up noise on agent cones
         if violation_start_tick is not None and tick >= violation_start_tick:
             for a in alerts:
                 if a.get("severity") == "OVER":
@@ -308,7 +329,6 @@ def bake_animation(total_occupants: int = 80,
             centroid = resolve(node_id)
             x, y, z  = _jitter(centroid, marker_id)
 
-            # Color states track precisely with filtered structural definitions
             if label in over_rooms or (in_monitor_window and label == violation_room):
                 colour = COLOUR_OVER
             elif floor in over_floors or (in_monitor_window and floor == violation_floor):
@@ -321,10 +341,11 @@ def bake_animation(total_occupants: int = 80,
         board_texts.append(
             _build_board_text(record["snapshot"], violation, violation_room))
 
-    # ── Floor colour keyframes ────────────────────────────────────────────
-    print("  Building floor colour keyframes...")
+    # ── Floor & sign timelines ───────────────────────────────────────────
+    print("  Building floor colour & sign state keyframes...")
     floor_keys = _build_floor_colour_timeline(
         timeline, frames_per_tick, violation_room)
+    sign_states = _build_sign_states_timeline(timeline, violation_room)
 
     # ── IFC Pset + sign updates ───────────────────────────────────────────
     print(f"  Writing ComplianceStatus=FAIL to IFC for {violation_room}...")
@@ -342,6 +363,7 @@ def bake_animation(total_occupants: int = 80,
         json.dump({
             "marker_keys"      : marker_keys,
             "board_texts"      : board_texts,
+            "sign_states"      : sign_states,
             "floor_keys"       : floor_keys,
             "floor_collections": FLOOR_COLLECTIONS,
             "skip_prefixes"    : list(SKIP_PREFIXES),
@@ -353,15 +375,24 @@ def bake_animation(total_occupants: int = 80,
         os.remove(RESULT_FILE)
 
     # ── Blender bake script ───────────────────────────────────────────────
-    code = f"""
+    code_template = """
 import bpy, bmesh, json, traceback
 
+def _set_emission(bsdf_node, color, strength=2.0):
+    for name in ['Emission Color', 'Emission']:
+        if name in bsdf_node.inputs:
+            bsdf_node.inputs[name].default_value = color
+            break
+    if 'Emission Strength' in bsdf_node.inputs:
+        bsdf_node.inputs['Emission Strength'].default_value = strength
+
 try:
-    with open(r"{INPUT_FILE}", "r", encoding="utf-8") as f:
+    with open(r"__INPUT_FILE__", "r", encoding="utf-8") as f:
         payload = json.load(f)
 
     marker_keys     = payload["marker_keys"]
     board_texts     = payload["board_texts"]
+    sign_states     = payload.get("sign_states", [])
     floor_keys      = payload["floor_keys"]
     floor_colls     = payload["floor_collections"]
     skip            = tuple(payload["skip_prefixes"])
@@ -373,17 +404,13 @@ try:
     scene.frame_end     = total_frames
     scene.frame_current = 0
 
-    # Explicitly enforce MATERIAL Shading Viewport Mode so node trees run natively
     for area in bpy.context.screen.areas:
         if area.type == 'VIEW_3D':
             for space in area.spaces:
                 if space.type == 'VIEW_3D':
                     space.shading.type = 'MATERIAL'
 
-    # ════════════════════════════════════════════════════════════════
-    # GENERATE COMPLIANT SHADERS FOR MATERIAL VIEWPORT RUNTIME
-    # ════════════════════════════════════════════════════════════════
-    # 1. Occupant Cones Shader
+    # Material Setup
     occ_mat = bpy.data.materials.get('OccupantShader')
     if occ_mat is None:
         occ_mat = bpy.data.materials.new('OccupantShader')
@@ -400,18 +427,20 @@ try:
     
     links_occ.new(bsdf_occ.outputs['BSDF'], out_node_occ.inputs['Surface'])
     links_occ.new(obj_info_occ.outputs['Color'], bsdf_occ.inputs['Base Color'])
-    links_occ.new(obj_info_occ.outputs['Color'], bsdf_occ.inputs['Emission Color'])
+    
+    em_socket = 'Emission Color' if 'Emission Color' in bsdf_occ.inputs else 'Emission'
+    if em_socket in bsdf_occ.inputs:
+        links_occ.new(obj_info_occ.outputs['Color'], bsdf_occ.inputs[em_socket])
     if 'Emission Strength' in bsdf_occ.inputs:
         bsdf_occ.inputs['Emission Strength'].default_value = 2.0
 
-    # 2. Transparent Floor Safety Structural Shader
     floor_mat = bpy.data.materials.get('FloorSafetyShader')
     if floor_mat is None:
         floor_mat = bpy.data.materials.new('FloorSafetyShader')
         
     floor_mat.use_nodes = True
-    floor_mat.blend_method = 'BLEND'  
-    floor_mat.shadow_method = 'NONE'
+    if hasattr(floor_mat, 'blend_method'):
+        floor_mat.blend_method = 'BLEND'  
     floor_mat.node_tree.nodes.clear()
     
     nodes_fl = floor_mat.node_tree.nodes
@@ -428,7 +457,6 @@ try:
     if 'Roughness' in bsdf_fl.inputs:
         bsdf_fl.inputs['Roughness'].default_value = 0.2
         
-    # Clean slate for floor animations and base colors to fix Tick 0 caching issues
     for floor_name, col_name in floor_colls.items():
         floor_col = bpy.data.collections.get(col_name)
         if floor_col:
@@ -438,9 +466,7 @@ try:
                         obj.animation_data_clear()
                     obj.color = (0.05, 0.70, 0.15, 1.0)
 
-    # ════════════════════════════════════════════════════════════════
-    # PART 1 — Occupant cone markers (obj.color keyframes)
-    # ════════════════════════════════════════════════════════════════
+    # PART 1 — Occupant cone markers
     sc  = scene.collection
     col = bpy.data.collections.get('OccupantMarkers')
     if col is None:
@@ -473,7 +499,7 @@ try:
     created = 0
     for marker_id_str, keys in marker_keys.items():
         marker_id = int(marker_id_str)
-        name = f'Occupant_{{marker_id:03d}}'
+        name = f'Occupant_{marker_id:03d}'
         obj  = _make_cone(name)
         col.objects.link(obj)
         obj.hide_viewport = False
@@ -498,11 +524,9 @@ try:
 
         created += 1
 
-    print(f'Occupant markers baked: {{created}}')
+    print(f'Occupant markers baked: {created}')
 
-    # ════════════════════════════════════════════════════════════════
-    # PART 2 — Floor colour keyframes (obj.color on floor objects)
-    # ════════════════════════════════════════════════════════════════
+    # PART 2 — Floor colour keyframes
     print('Baking floor colours...')
 
     for floor_name, col_name in floor_colls.items():
@@ -512,7 +536,7 @@ try:
 
         floor_col = bpy.data.collections.get(col_name)
         if not floor_col:
-            print(f'  NOT FOUND: {{col_name}}')
+            print(f'  NOT FOUND: {col_name}')
             continue
 
         floor_objs = [
@@ -538,12 +562,10 @@ try:
                         for kp in fc.keyframe_points:
                             kp.interpolation = 'CONSTANT'
 
-        print(f'  {{floor_name}}: {{len(floor_objs)}} objects, {{len(keys)}} keyframes')
+        print(f'  {floor_name}: {len(floor_objs)} objects, {len(keys)} keyframes')
 
-    # ════════════════════════════════════════════════════════════════
-    # PART 3 — Board text (frame change handler)
-    # ════════════════════════════════════════════════════════════════
-    print('Setting up board text handler...')
+    # PART 3 — Board & Sign frame handler
+    print('Setting up board and signage frame handler...')
     if 'FireSafetyBoard' not in bpy.data.objects:
         bpy.ops.object.text_add(location=(-30.0, -5.0, 16.0))
         board = bpy.context.object
@@ -555,9 +577,8 @@ try:
         bmat.use_nodes = True
         bnode = bmat.node_tree.nodes.get('Principled BSDF')
         if bnode:
-            bnode.inputs['Base Color'].default_value     = (1.0, 0.85, 0.0, 1.0)
-            bnode.inputs['Emission Color'].default_value  = (1.0, 0.85, 0.0, 1.0)
-            bnode.inputs['Emission Strength'].default_value = 2.0
+            bnode.inputs['Base Color'].default_value = (1.0, 0.85, 0.0, 1.0)
+            _set_emission(bnode, (1.0, 0.85, 0.0, 1.0), 2.0)
         board.data.materials.clear()
         board.data.materials.append(bmat)
     else:
@@ -566,6 +587,7 @@ try:
         board.data.size   = 0.85
 
     scene['fs_board_texts']     = json.dumps(board_texts)
+    scene['fs_sign_states']     = json.dumps(sign_states)
     scene['fs_frames_per_tick'] = frames_per_tick
 
     def _board_handler(scn):
@@ -574,8 +596,18 @@ try:
         if not texts: return
         data  = json.loads(texts)
         idx   = max(0, min(scn.frame_current // fpt, len(data) - 1))
-        b     = bpy.data.objects.get('FireSafetyBoard')
+        
+        b = bpy.data.objects.get('FireSafetyBoard')
         if b:  b.data.body = data[idx]
+
+        sign_data_str = scn.get('fs_sign_states')
+        if sign_data_str:
+            sign_data = json.loads(sign_data_str)
+            current_signs = sign_data[idx] if idx < len(sign_data) else {}
+            for sign_name, text_val in current_signs.items():
+                sobj = bpy.data.objects.get(sign_name)
+                if sobj and hasattr(sobj.data, 'body'):
+                    sobj.data.body = text_val
 
     existing = [fn for fn in bpy.app.handlers.frame_change_pre
                 if fn.__name__ == '_board_handler']
@@ -584,31 +616,31 @@ try:
     bpy.app.handlers.frame_change_pre.append(_board_handler)
     _board_handler(scene)
 
-    # ════════════════════════════════════════════════════════════════
-    # PART 4 — Reset to frame 0 and redraw
-    # ════════════════════════════════════════════════════════════════
+    # PART 4 — Reset frame & redraw
     bpy.context.scene.frame_set(0)
     for area in bpy.context.screen.areas:
         if area.type == 'VIEW_3D': area.tag_redraw()
 
-    report = {{
+    report = {
         'status'       : 'ok',
         'markers_baked': created,
         'floors_baked' : len(floor_colls),
         'total_frames' : total_frames,
-    }}
+    }
 
 except Exception as e:
-    report = {{
+    report = {
         'status' : 'error',
         'message': str(e),
         'trace'  : traceback.format_exc()
-    }}
+    }
 
-with open(r"{RESULT_FILE}", 'w', encoding='utf-8') as f:
+with open(r"__RESULT_FILE__", 'w', encoding='utf-8') as f:
     json.dump(report, f)
 print('Bake complete:', report.get('status'))
 """
+    code = code_template.replace("__INPUT_FILE__", INPUT_FILE).replace("__RESULT_FILE__", RESULT_FILE)
+
     print("  Sending to Blender (30–90s)...")
     send_to_blender(code)
     result = _read_result(timeout=300.0)
