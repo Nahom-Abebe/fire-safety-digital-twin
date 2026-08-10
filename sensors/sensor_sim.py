@@ -4,12 +4,7 @@
 #   1. Room attractiveness (node property, set by agent)
 #   2. Sign status (BLOCKED sign reduces edge probability to near zero)
 #   3. Room capacity headroom (agents avoid rooms at/over capacity)
-#
-# Alert threshold fix applied:
-#   OVER    = current > max  (strictly greater than — e.g. 4/3)
-#   WARNING = current >= max * 0.8 AND current <= max (approaching limit)
-#   This prevents 3/3 rooms from firing as OVER and triggering
-#   unnecessary expensive agent cycles.
+#   4. Global Evacuation Mode (directed movement to emergency exits)
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,29 +23,48 @@ G = BUILDING_GRAPH
 ROOM_NODES = [n for n, d in G.nodes(data=True) if d["node_type"] == "room"]
 
 # ── Simulation state ──────────────────────────────────────────────────────────
-occupancy    = {node: 0 for node in G.nodes}
-active_event = None
-tick_count   = 0
-event_log    = []
+occupancy       = {node: 0 for node in G.nodes}
+active_event    = None
+tick_count      = 0
+event_log       = []
+EVACUATION_MODE = False
 
 # Sign status fed back from bim/signage.py each tick
 # {graph_label: "BLOCKED" | "ACTIVE" | "ALTERNATE"}
-sign_status  = {}
+sign_status     = {}
 
 
 # ── Initialise ────────────────────────────────────────────────────────────────
 
 def initialise_occupants(total: int = 80, seed: int = None):
-    global occupancy, active_event, tick_count, event_log, sign_status
-    occupancy    = {node: 0 for node in G.nodes}
-    active_event = None
-    tick_count   = 0
-    event_log    = []
-    sign_status  = {}
+    global occupancy, active_event, tick_count, event_log, sign_status, EVACUATION_MODE
+    occupancy       = {node: 0 for node in G.nodes}
+    active_event    = None
+    tick_count      = 0
+    event_log       = []
+    sign_status     = {}
+    EVACUATION_MODE = False
+    
     rng = random.Random(seed) if seed is not None else random
     for _ in range(total):
         occupancy[rng.choice(ROOM_NODES)] += 1
     print(f"Initialised {total} occupants across {len(ROOM_NODES)} rooms")
+
+
+# ── Evacuation Controls ───────────────────────────────────────────────────────
+
+def trigger_global_evacuation():
+    """Triggers global evacuation mode, routing all occupants to nearest exits."""
+    global EVACUATION_MODE
+    EVACUATION_MODE = True
+    print(f"EVACUATION: Global building evacuation triggered at tick {tick_count}!")
+
+
+def clear_evacuation():
+    """Clears global evacuation mode and returns to normal occupant wandering."""
+    global EVACUATION_MODE
+    EVACUATION_MODE = False
+    print(f"EVACUATION: Evacuation cleared at tick {tick_count}.")
 
 
 # ── Signage feedback ──────────────────────────────────────────────────────────
@@ -110,39 +124,62 @@ def _edge_probability(from_node: int, to_node: int) -> float:
 def move_occupants():
     """
     One simulation tick — probabilistic movement per Peter's model.
-    Each occupant independently chooses to stay or move to a neighbour,
-    weighted by attractiveness, headroom, sign status, and edge cost.
+    If EVACUATION_MODE is active, all occupants move along shortest paths to EXIT_IDS.
     """
     global occupancy, tick_count
     new_state = {node: 0 for node in G.nodes}
 
-    for node in G.nodes:
-        count = occupancy[node]
-        if count == 0:
-            continue
-
-        for _ in range(count):
-            if node in EXIT_IDS:
-                new_state[node] += 1
+    if EVACUATION_MODE:
+        # Directed evacuation pathing towards exit nodes
+        for node, count in occupancy.items():
+            if count == 0:
                 continue
 
-            neighbours = list(G.neighbors(node))
-            candidates = [node] + neighbours
+            # If occupant is already at an exit node, stay there
+            if node in EXIT_IDS:
+                new_state[node] += count
+                continue
 
-            stay_weight = G.nodes[node].get("attractiveness", 1.0) * 0.5
-            weights     = [stay_weight]
-            for nb in neighbours:
-                weights.append(_edge_probability(node, nb))
+            # Find shortest exit path for current node
+            path_info = get_exit_path(node)
+            path = path_info.get("path", [])
 
-            total = sum(weights)
-            if total <= 0:
-                next_node = node
+            # Move 1 step along exit path
+            if len(path) > 1:
+                next_node = path[1]
             else:
-                norm_weights = [w / total for w in weights]
-                next_node    = random.choices(candidates,
-                                              weights=norm_weights)[0]
+                next_node = node
 
-            new_state[next_node] += 1
+            new_state[next_node] += count
+    else:
+        # Normal probabilistic wandering
+        for node in G.nodes:
+            count = occupancy[node]
+            if count == 0:
+                continue
+
+            for _ in range(count):
+                if node in EXIT_IDS:
+                    new_state[node] += 1
+                    continue
+
+                neighbours = list(G.neighbors(node))
+                candidates = [node] + neighbours
+
+                stay_weight = G.nodes[node].get("attractiveness", 1.0) * 0.5
+                weights     = [stay_weight]
+                for nb in neighbours:
+                    weights.append(_edge_probability(node, nb))
+
+                total = sum(weights)
+                if total <= 0:
+                    next_node = node
+                else:
+                    norm_weights = [w / total for w in weights]
+                    next_node    = random.choices(candidates,
+                                                  weights=norm_weights)[0]
+
+                new_state[next_node] += 1
 
     occupancy  = new_state
     tick_count += 1
@@ -151,7 +188,7 @@ def move_occupants():
 # ── Event handling ────────────────────────────────────────────────────────────
 
 def trigger_event(node_label: str,
-                   event_type: str = "overcapacity") -> dict:
+                  event_type: str = "overcapacity") -> dict:
     global active_event
     node_id = next(
         (n for n, d in G.nodes(data=True) if d["label"] == node_label),
@@ -184,11 +221,6 @@ def get_sensor_snapshot() -> dict:
         fl = G.nodes[node]["floor"]
         by_floor[fl] = by_floor.get(fl, 0) + count
 
-    # ── Alert threshold fix ───────────────────────────────────────────────
-    # OVER    : current > max  (strictly greater — only 4/3, 5/3 etc.)
-    # WARNING : current == max (at limit, approaching — 3/3)
-    # This prevents 3/3 rooms from triggering expensive agent cycles.
-    # A room at exactly 100% is a WARNING, not an OVER violation.
     alerts = []
     for node, count in occupancy.items():
         ntype = G.nodes[node]["node_type"]
@@ -196,7 +228,6 @@ def get_sensor_snapshot() -> dict:
             continue
         max_occ = get_max_occupancy(node)
         if count > max_occ:
-            # Strictly over capacity — genuine ADB violation
             alerts.append({
                 "node_id" : node,
                 "label"   : G.nodes[node]["label"],
@@ -207,7 +238,6 @@ def get_sensor_snapshot() -> dict:
                 "severity": "OVER",
             })
         elif count == max_occ:
-            # At limit — pre-emptive warning per Peter's criterion 3
             alerts.append({
                 "node_id" : node,
                 "label"   : G.nodes[node]["label"],
@@ -218,7 +248,6 @@ def get_sensor_snapshot() -> dict:
                 "severity": "WARNING",
             })
         elif count >= max_occ * 0.8:
-            # Approaching limit — early pre-emptive warning
             alerts.append({
                 "node_id" : node,
                 "label"   : G.nodes[node]["label"],
@@ -234,6 +263,7 @@ def get_sensor_snapshot() -> dict:
         "tick"     : tick_count,
         "total_occ": total,
         "at_exits" : sum(occupancy.get(e, 0) for e in EXIT_IDS),
+        "evacuation_mode": EVACUATION_MODE,
         "occupancy": {G.nodes[n]["label"]: c
                       for n, c in occupancy.items() if c > 0},
         "by_floor" : by_floor,
@@ -289,11 +319,12 @@ if __name__ == "__main__":
         print(f"  Tick {i+1:02d}: total={snap['total_occ']} "
               f"over={len(overs)} "
               f"warnings={len(warns)}")
-        if overs:
-            for a in overs:
-                print(f"    OVER: {a['label']} "
-                      f"{a['current']}/{a['max']}")
+
+    print("\nTesting Evacuation Mode...")
+    trigger_global_evacuation()
+    for i in range(5):
+        move_occupants()
+        snap = get_sensor_snapshot()
+        print(f"  Evac Tick {i+1:02d}: occupants at exit={snap['at_exits']}/{snap['total_occ']}")
 
     print("\n✅ sensor_sim verified")
-    print("   OVER alerts should only show rooms with current > max")
-    print("   e.g. 4/3 is OVER, 3/3 is WARNING, 2/3 is OK")

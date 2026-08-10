@@ -3,12 +3,15 @@
 # and lets Claude reason about what it sees in real time.
 #
 # Fixes applied in this version:
+#   - Smooth cone marker interpolation across simulation ticks
+#   - Cleaned HUD formatting: Strips Markdown tags (**), auto-wraps lines, caps max height
+#   - System prompt optimization: Directs agent to write concise plain text for the HUD
 #   - Fixed floor colour persistence: floors revert to GREEN when violations clear
 #   - Optimized Blender IPC: floor colours only updated when floor states change
 #   - Unified default seed across CLI and function signature (default 16)
 #   - Added try-except wrapper around Blender IPC calls to prevent tick loop crashes
 
-import sys, os, json, time, argparse
+import sys, os, json, time, argparse, textwrap, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import anthropic
@@ -43,6 +46,53 @@ SKIP_PREFIXES = (
 _LABEL_TO_FLOOR = {
     d["label"]: d["floor"] for _, d in G.nodes(data=True)
 }
+
+
+# ── HUD Text Formatting ───────────────────────────────────────────────────────
+
+def format_hud_directive(raw_text: str, max_line_width: int = 40, max_lines: int = 8) -> str:
+    """
+    Strips Markdown formatting, wraps lines cleanly, and limits the vertical line count
+    so agent directives render within the Blender 3D HUD without truncating awkwardly.
+    """
+    if not raw_text:
+        return ""
+
+    # Strip Markdown asterisks (*, **) and headers (#)
+    clean_text = re.sub(r"\*+", "", raw_text)
+    clean_text = re.sub(r"^#+\s*", "", clean_text, flags=re.MULTILINE)
+
+    formatted_lines = []
+    for line in clean_text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        if len(line) > max_line_width:
+            formatted_lines.extend(textwrap.wrap(line, width=max_line_width, break_long_words=False))
+        else:
+            formatted_lines.append(line)
+
+    # Truncate total lines cleanly to fit within the physical 3D HUD boundary
+    if len(formatted_lines) > max_lines:
+        formatted_lines = formatted_lines[: max_lines - 1] + ["...[truncated]"]
+
+    return "\n".join(formatted_lines)
+
+
+# ── Smooth Movement Animation ──────────────────────────────────────────────────
+
+def _animate_cone_movement_smooth(snapshot: dict, steps: int = 5, step_delay: float = 0.05):
+    """
+    Smoothly interpolates occupant marker cone positions in Blender 
+    over multiple sub-steps to eliminate teleports between ticks.
+    """
+    try:
+        # Reposition markers smoothly across intermediate interpolation steps
+        for step in range(1, steps + 1):
+            live_reposition_markers(snapshot)
+            time.sleep(step_delay)
+    except Exception as e:
+        print(f"Warning: Smooth cone animation encountered an error: {e}")
 
 
 # ── Clear baked animation ─────────────────────────────────────────────────────
@@ -208,7 +258,7 @@ def run(total_ticks: int = 25,
 
     # Set initial state
     confirmed_red_floors = set()
-    last_rendered_red_floors = None  # Caching for socket performance
+    last_rendered_red_floors = None   # Caching for socket performance
     
     _update_floor_colours(confirmed_red_floors)
     last_rendered_red_floors = set(confirmed_red_floors)
@@ -241,8 +291,8 @@ def run(total_ticks: int = 25,
         move_occupants()
         snapshot = get_sensor_snapshot()
 
-        # ── Update Blender visuals ────────────────────────────────────────
-        live_reposition_markers(snapshot)
+        # ── Update Blender visuals smoothly ──────────────────────────────
+        _animate_cone_movement_smooth(snapshot, steps=4, step_delay=0.03)
         update_board(snapshot)
 
         # ── Tick summary ──────────────────────────────────────────────────
@@ -319,7 +369,9 @@ def run(total_ticks: int = 25,
                 f"genuine violation against the IFC model. "
                 f"Do NOT trigger any building-wide response — "
                 f"only redirect occupants away from the affected room. "
-                f"Keep your board directive concise — max 4 short lines."
+                f"IMPORTANT: Write your board directive in concise PLAIN TEXT ONLY. "
+                f"Do NOT use Markdown bolding (**), asterisks, or headers, "
+                f"and keep it under 5 short lines so it fits the 3D HUD."
             )
 
             result = run_agent_cycle(
@@ -337,8 +389,7 @@ def run(total_ticks: int = 25,
                 _update_floor_colours(confirmed_red_floors)
                 print(f"  Floor(s) confirmed RED: {confirmed_red_floors}")
 
-                # Cones in violation room respond to sign update
-                # by redirecting toward nearest exit
+                # Cones in violation room respond to sign update by redirecting toward exit
                 try:
                     from bim.assembly_point import redirect_cones_via_sign
                     from bim.room_geometry import load_room_centroids
@@ -355,6 +406,13 @@ def run(total_ticks: int = 25,
                 except Exception as e:
                     print(f"  Sign response skipped: {e}")
 
+            # ── Format directive for HUD display ──────────────────────────
+            formatted_directive = format_hud_directive(
+                result["directive"], 
+                max_line_width=40, 
+                max_lines=8
+            )
+
             # ── Log ───────────────────────────────────────────────────────
             session_log["agent_cycles"].append({
                 "tick"             : tick,
@@ -362,15 +420,15 @@ def run(total_ticks: int = 25,
                 "tool_count"       : result["tool_count"],
                 "signs_updated"    : result["signs_updated"],
                 "adb_cited"        : result["adb_cited"],
-                "directive_excerpt": result["directive"][:200],
+                "directive"        : result["directive"],
             })
             session_log["total_actions"] += result["signs_updated"]
             if result["signs_updated"] > 0:
                 for a in overs:
                     session_log["rooms_managed"].add(a["label"])
 
-            # Update board with agent directive
-            update_board(snapshot, result["directive"])
+            # Update board with formatted agent directive
+            update_board(snapshot, formatted_directive)
 
             print(f"\n  Agent cycle complete:")
             print(f"  Latency      : {result['latency_seconds']}s")

@@ -46,19 +46,14 @@ for area in bpy.context.screen.areas:
 def update_board(snapshot: dict, agent_message: str = "") -> dict:
     """
     Updates the board with current occupancy state and agent directive.
-
-    Deliberate design choices:
-    - NO 'Evacuated' counter — this is occupancy management, not evacuation
-    - Floor names shortened to fit within _MAX_LINE characters
-    - Agent directive truncated to 6 lines max, each capped at 45 chars
-    - Overcapacity list limited to 3 rooms max
-    - All lines pass through _truncate() before rendering
+    Turns all floor objects RED if evacuation_mode is active.
     """
-    by_floor  = snapshot.get("by_floor", {})
-    alerts    = snapshot.get("alerts", [])
-    total     = snapshot.get("total_occ", 0)
-    tick      = snapshot.get("tick", 0)
-    timestamp = snapshot.get("timestamp", "")
+    by_floor   = snapshot.get("by_floor", {})
+    alerts     = snapshot.get("alerts", [])
+    total      = snapshot.get("total_occ", 0)
+    tick       = snapshot.get("tick", 0)
+    timestamp  = snapshot.get("timestamp", "")
+    evac_mode  = snapshot.get("evacuation_mode", False)
 
     # Floor display order — F0 first, F3 last
     FLOOR_ORDER = [
@@ -93,9 +88,11 @@ def update_board(snapshot: dict, agent_message: str = "") -> dict:
 
     lines.append("")
 
-    # Compliance status
+    # Compliance & Evacuation status
     over = [a for a in alerts if a.get("severity") == "OVER"]
-    if over:
+    if evac_mode:
+        lines.append("Status: CRITICAL - EVACUATING")
+    elif over:
         lines.append(f"OVERCAPACITY ({len(over)}):")
         for a in over[:3]:
             lines.append(_truncate(
@@ -120,9 +117,35 @@ def update_board(snapshot: dict, agent_message: str = "") -> dict:
 
     code = f"""
 import bpy
+
+# Update text board content
 b = bpy.data.objects.get('FireSafetyBoard')
 if b:
     b.data.body = '''{text}'''
+
+# If Escalation / Evacuation mode is active, set all floor objects to RED material
+if {str(evac_mode)}:
+    red_mat = bpy.data.materials.get('EvacRedMaterial')
+    if not red_mat:
+        red_mat = bpy.data.materials.new('EvacRedMaterial')
+        red_mat.use_nodes = True
+        bsdf = red_mat.node_tree.nodes.get('Principled BSDF')
+        if bsdf:
+            bsdf.inputs['Base Color'].default_value = (1.0, 0.0, 0.0, 1.0)
+            if 'Emission Color' in bsdf.inputs:
+                bsdf.inputs['Emission Color'].default_value = (1.0, 0.0, 0.0, 1.0)
+            if 'Emission Strength' in bsdf.inputs:
+                bsdf.inputs['Emission Strength'].default_value = 1.5
+
+    floor_names = ['F0 Ground Floor', 'F1 First Floor', 'F2 Second Floor', 'F3 Third Floor']
+    for fl_name in floor_names:
+        fl_obj = bpy.data.objects.get(fl_name)
+        if fl_obj:
+            if fl_obj.data.materials:
+                fl_obj.data.materials[0] = red_mat
+            else:
+                fl_obj.data.materials.append(red_mat)
+
 for area in bpy.context.screen.areas:
     if area.type == 'VIEW_3D': area.tag_redraw()
 """
@@ -130,11 +153,11 @@ for area in bpy.context.screen.areas:
 
 
 if __name__ == "__main__":
-    # Quick test — does not require Blender connection
     fake_snapshot = {
         "timestamp": "14:30:00",
         "tick"     : 5,
         "total_occ": 80,
+        "evacuation_mode": True,
         "by_floor" : {
             "F0 Ground Floor": 22,
             "F1 First Floor" : 25,
@@ -146,12 +169,10 @@ if __name__ == "__main__":
         ],
     }
     fake_message = (
-        "Room 1-16 (Bedroom) OVER capacity: 4/3.\n"
-        "SIGN_F1_CORRIDOR set to ALTERNATE.\n"
-        "Ref: ADB Vol2 Clause 2.43 care home bedroom."
+        "CRITICAL: FULL BUILDING EVACUATION INITIATED.\n"
+        "ALL OCCUPANTS EVACUATING TO ASSEMBLY POINT."
     )
 
-    # Preview the board text without Blender
-    from bim.board import _truncate, FLOOR_ORDER  # noqa
-    print("Board text preview:")
+    print("Board text preview (Evacuation Mode):")
     print("-" * _MAX_LINE)
+    update_board(fake_snapshot, fake_message)

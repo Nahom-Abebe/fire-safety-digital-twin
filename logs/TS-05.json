@@ -1,18 +1,28 @@
 {
   "scenario_id": "TS-05",
-  "latency_seconds": 14.942,
-  "tool_count": 5,
+  "latency_seconds": 23.501,
+  "tool_count": 4,
   "tools_used": [
     "sense_building_state",
     "sense_room",
-    "get_regulations",
     "check_compliance",
     "act_update_board"
   ],
-  "directive": "---\n\n## **SENSE-REASON-ACT CYCLE COMPLETE**\n\n### **Summary:**\n\n**Building State (Tick 0, 10:19:19)**\n- **Total Occupancy:** 40 persons across 4 floors\n- **Distribution:** F0=11, F1=14, F2=8, F3=7 \u2713 Well distributed\n- **Alerts:** 1 WARNING (room 1-12)\n\n**Reason Analysis**\n- **Room 1-12** (Bedroom, F1): 3/3 occupancy flagged as WARNING\n- **Compliance Check:** `check_compliance` returned **PASS**\n- **ADB Justification:** ADB Vol2 Table B1 Purpose Group 2a permits 3 occupants in a 6.01 m\u00b2 bedroom for a residential care home\n- **Conclusion:** Room is at exactly its maximum capacity \u2713 **NOT a violation**\n\n**Action Taken**\n- \u2713 No signs updated\n- \u2713 No room attractiveness adjusted\n- \u2713 Board updated with FALSE POSITIVE confirmation\n\n**Status:** **SYSTEM IDLE \u2014 ALL ROOMS WITHIN SAFE OCCUPANCY LIMITS**\n\nThe building is operating safely within ADB Purpose Group 2a compliance parameters. The graph-level WARNING for room 1-12 is a **false positive** \u2014 the IFC model confirms it is at its authorized maximum with no violation.",
-  "adb_cited": true,
+  "directive_clean": {
+    "cycle": "Tick 0 \u2014 IDLE",
+    "adb": "See directive_raw for ADB citation",
+    "action": "- No OVER capacity violations",
+    "note": "Verbose format parsed"
+  },
+  "directive_raw": "---\n\n## **Sense-Reason-Act Cycle Complete**\n\n**Sense Result:**\n- Building state: 40 occupants across 4 floors in normal distribution\n- Alert flagged: Room 1-12 at WARNING (3/3 at graph level)\n- No OVER capacity violations\n\n**Reason Result:**\n- Room 1-12 compliance check: **PASS**\n- IFC model shows actual max capacity is 130 persons (Purpose Group 2a Lounge)\n- Graph alert was based on simulation-layer max of 3, causing false positive\n- Current occupancy (3) is only 2.3% of real safe capacity\n\n**Act Result:**\n- **No signs updated** (no genuine violations)\n- **No attractiveness adjustments** (no risk of overcrowding)\n- **Board updated** with false positive note and compliance confirmation\n- **Status:** System idle\u2014all rooms within safe occupancy limits\n\nThe building is operating safely during standard hours. No intervention required.",
+  "evaluation": {
+    "passed": true,
+    "sequence_valid": true,
+    "citation_valid": true,
+    "behavior_valid": true,
+    "failure_reasons": []
+  },
   "sign_updates": 0,
-  "timestamp": "2026-07-20 10:19:33",
-  "scenario": "Baseline normal occupancy",
+  "timestamp": "2026-08-10 19:41:02",
   "pre_condition": "0 OVER, 1 WARNING"
 }

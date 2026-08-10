@@ -1,82 +1,76 @@
 # bim/manager_panel.py
 # Building manager overlay — ESCALATE triggers smooth pathfinding evacuation.
 #
-# Movement fix: fixed-speed stepping (not proportional) so cones visibly
-# walk at constant pace. Paths simplified to 3 waypoints per cone:
-#   floor exit node → ground floor exit → assembly point
-# This avoids the NetworkX BFS freeze while still showing exit-path routing.
+# Bug fix: paths JSON was embedded in an f-string which broke on curly braces.
+# Now paths are saved to a temp file and read by Blender — fully reliable.
+#
+# Movement: fixed-speed (0.35m/step) so cones visibly walk to assembly point.
+# Paths: room → corridor → exit → assembly point (3 waypoints, no BFS freeze).
 
 import os, sys, json, random
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bim.ifc_bridge import send_to_blender
 
+# Temp file for passing paths to Blender
+BIM_DIR    = os.path.dirname(os.path.abspath(__file__))
+PATHS_FILE = os.path.join(BIM_DIR, "_evac_paths.json").replace("\\", "/")
+
 
 def _build_simple_paths(snapshot: dict, centroids: dict) -> dict:
     """
-    Builds simplified 3-waypoint paths for each cone:
-      1. Nearest corridor on their floor (via centroid lookup)
-      2. Ground floor main exit (EXIT-1 centroid)
-      3. Assembly point (outside building)
+    Builds 3-waypoint paths for every cone:
+      1. Nearest corridor centroid on same floor
+      2. Ground floor exit centroid
+      3. Assembly point with jitter
 
-    Uses simple floor-based routing rather than full BFS per cone —
-    avoids the thread-blocking NetworkX traversal that caused the freeze.
+    Simple lookup — no BFS, no freeze.
     Returns {marker_id_str: [[x,y,z], [x,y,z], [x,y,z]]}
     """
     from sensors.building_graph import BUILDING_GRAPH as G
 
     occupancy = snapshot.get("occupancy", {})
 
-    # Find exit centroid (ground floor main exit)
+    # Find exit centroid
     exit_cent = None
     for label, c in centroids.items():
-        if "EXIT" in label.upper():
+        if "EXIT" in label.upper() or "exit" in label.lower():
             exit_cent = c
             break
     if exit_cent is None:
-        exit_cent = {"x": 16.0, "y": -20.0, "z": 0.0}
+        exit_cent = {"x": 16.0, "y": -18.0, "z": 0.0}
 
-    # Assembly point
     ASSEMBLY_X, ASSEMBLY_Y, ASSEMBLY_Z = 16.0, -35.0, 0.85
+
+    # Build floor → corridor centroid lookup
+    floor_corridor = {}
+    for cl, c in centroids.items():
+        n = next((nd for nd, d in G.nodes(data=True) if d["label"] == cl), None)
+        if n and G.nodes[n].get("node_type") == "corridor":
+            fl = G.nodes[n].get("floor", "")
+            if fl not in floor_corridor:
+                floor_corridor[fl] = c
 
     rng       = random.Random(42)
     paths     = {}
     marker_id = 0
 
     for label, count in occupancy.items():
-        # Find corridor centroid on same floor
         node = next((n for n, d in G.nodes(data=True)
                      if d["label"] == label), None)
         if node is None:
             marker_id += count
             continue
 
-        floor = G.nodes[node].get("floor", "")
-
-        # Find nearest corridor centroid on same floor
-        corridor_cent = None
-        for cl, c in centroids.items():
-            n2 = next((n for n, d in G.nodes(data=True)
-                       if d["label"] == cl), None)
-            if n2 and G.nodes[n2].get("node_type") == "corridor" \
-               and G.nodes[n2].get("floor") == floor:
-                corridor_cent = c
-                break
-
-        if corridor_cent is None:
-            corridor_cent = exit_cent
+        floor         = G.nodes[node].get("floor", "")
+        corridor_cent = floor_corridor.get(floor, exit_cent)
 
         for _ in range(count):
-            # Jitter final position at assembly point
             jx = (rng.random() - 0.5) * 14.0
             jy = (rng.random() - 0.5) * 14.0
-
             paths[str(marker_id)] = [
-                [corridor_cent["x"], corridor_cent["y"],
-                 corridor_cent["z"] + 0.85],           # step 1: corridor
-                [exit_cent["x"], exit_cent["y"],
-                 exit_cent["z"] + 0.85],               # step 2: exit
-                [ASSEMBLY_X + jx, ASSEMBLY_Y + jy,
-                 ASSEMBLY_Z],                           # step 3: assembly
+                [corridor_cent["x"], corridor_cent["y"], corridor_cent["z"] + 0.85],
+                [exit_cent["x"],     exit_cent["y"],     exit_cent["z"] + 0.85],
+                [ASSEMBLY_X + jx,    ASSEMBLY_Y + jy,    ASSEMBLY_Z],
             ]
             marker_id += 1
 
@@ -86,7 +80,7 @@ def _build_simple_paths(snapshot: dict, centroids: dict) -> dict:
 def install_manager_panel():
     project_root = os.path.dirname(
         os.path.dirname(os.path.abspath(__file__))
-    ).replace("\\", "\\\\")
+    ).replace("\\", "/")
 
     blender_code = "\n".join([
         "import bpy, sys, blf, gpu",
@@ -103,7 +97,6 @@ def install_manager_panel():
         "    except Exception: pass",
         "_NS['fs_handle'] = None",
         "",
-        "# ── Button layout ─────────────────────────────────────────────",
         "BTN = {",
         "    'e': {'x': 60, 'y': 120, 'w': 280, 'h': 50},",
         "    'r': {'x': 60, 'y': 58,  'w': 280, 'h': 50},",
@@ -147,16 +140,16 @@ def install_manager_panel():
         "    _rect(b['r']['x'], b['r']['y'], b['r']['w'], b['r']['h'], cr)",
         "    _rect(b['e']['x'], b['e']['y'], 5, b['e']['h'], (1, 0.3, 0.3, 0.9))",
         "    _rect(b['r']['x'], b['r']['y'], 5, b['r']['h'], (0.3, 1, 0.4, 0.9))",
-        "    _text('ESCALATE TO ASSEMBLY POINT', b['e']['x']+14, b['e']['y']+20, sz=12)",
-        "    _text('Shift+E', b['e']['x']+14, b['e']['y']+6, sz=9, col=(1,1,1,0.5))",
-        "    _text('RESET ALL SIGNS TO CLEAR',   b['r']['x']+14, b['r']['y']+20, sz=12)",
-        "    _text('Shift+R', b['r']['x']+14, b['r']['y']+6, sz=9, col=(1,1,1,0.5))",
+        "    _text('ESCALATE TO ASSEMBLY POINT', b['e']['x']+14, b['e']['y']+18, sz=12)",
+        "    _text('RESET ALL SIGNS TO CLEAR',   b['r']['x']+14, b['r']['y']+18, sz=12)",
         "",
         "# ── ESCALATE ──────────────────────────────────────────────────",
-        "def _escalate():",
-        "    import sys; sys.path.insert(0, ROOT)",
+        f"PATHS_FILE = r'{PATHS_FILE}'",
         "",
-        "    # Step 1 — lower attractiveness (Python, instant)",
+        "def _escalate():",
+        "    import sys, json; sys.path.insert(0, ROOT)",
+        "",
+        "    # Step 1 — lower attractiveness",
         "    try:",
         "        from sensors.sensor_sim import set_room_attractiveness",
         "        from sensors.building_graph import BUILDING_GRAPH as G",
@@ -164,10 +157,10 @@ def install_manager_panel():
         "            if d.get('node_type') == 'room':",
         "                try: set_room_attractiveness(d['label'], 0.0)",
         "                except Exception: pass",
-        "    except Exception: pass",
+        "    except Exception as e:",
+        "        print(f'Attractiveness error: {e}')",
         "",
-        "    # Step 2 — build simple 3-waypoint paths in Python (no BFS freeze)",
-        "    paths_json = '{}'",
+        "    # Step 2 — build paths and save to file (avoids f-string curly brace bug)",
         "    try:",
         "        from sensors.sensor_sim import get_sensor_snapshot",
         "        from bim.room_geometry import load_room_centroids",
@@ -175,108 +168,95 @@ def install_manager_panel():
         "        snap      = get_sensor_snapshot()",
         "        centroids = load_room_centroids()",
         "        paths     = _build_simple_paths(snap, centroids)",
-        "        import json",
-        "        paths_json = json.dumps(paths)",
-        "        print(f'Built paths for {len(paths)} cones')",
+        "        with open(PATHS_FILE, 'w') as fp:",
+        "            json.dump(paths, fp)",
+        "        print(f'Saved paths for {len(paths)} cones to {PATHS_FILE}')",
         "    except Exception as e:",
         "        print(f'Path build error: {e}')",
+        "        paths = {}",
         "",
-        "    # Step 3 — one Blender call: signs red + start smooth timer walk",
+        "    # Step 3 — one Blender call: signs red + start timer (reads file)",
         "    from bim.ifc_bridge import send_to_blender as _s",
-        "    _s(f'''",
-        "import bpy, json, math",
-        "",
-        "# Update sign panels RED",
-        "RED = (0.90, 0.05, 0.05, 1.0)",
-        "for obj in bpy.data.objects:",
-        "    if obj.name.startswith(\"SignPanel_\") and obj.data and obj.data.materials:",
-        "        nd = obj.data.materials[0].node_tree.nodes.get(\"Principled BSDF\")",
-        "        if nd:",
-        "            nd.inputs[\"Base Color\"].default_value = RED",
-        "            if \"Emission Color\" in nd.inputs: nd.inputs[\"Emission Color\"].default_value = RED",
-        "            if \"Emission Strength\" in nd.inputs: nd.inputs[\"Emission Strength\"].default_value = 3.0",
-        "    if obj.name.startswith(\"SignText_\"):",
-        "        obj.data.body = \"ESCALATED\\\\nProceed to\\\\nAssembly Point\"",
-        "",
-        "# Load paths",
-        "all_paths = json.loads(r\"\"\"{paths_json}\"\"\")",
-        "ORANGE    = (0.95, 0.55, 0.10, 1.0)",
-        "wp_idx    = {{mid: 0 for mid in all_paths}}",
-        "",
-        "# Turn all cones orange immediately",
-        "for mid in all_paths:",
-        "    obj = bpy.data.objects.get(f\"Occupant_{{int(mid):03d}}\")",
-        "    if obj:",
-        "        obj.color = ORANGE",
-        "        if obj.data and obj.data.materials:",
-        "            bsdf = obj.data.materials[0].node_tree.nodes.get(\"Principled BSDF\")",
-        "            if bsdf:",
-        "                bsdf.inputs[\"Base Color\"].default_value    = ORANGE",
-        "                bsdf.inputs[\"Emission Color\"].default_value = ORANGE",
-        "",
-        "# Fixed-speed movement: 0.35 metres per step at 0.06s interval",
-        "# Cones visibly walk — not proportional fade",
-        "SPEED    = 0.35",
-        "INTERVAL = 0.06",
-        "THRESH   = 0.25",
-        "",
-        "def _walk():",
-        "    all_done = True",
-        "    for mid, wps in all_paths.items():",
-        "        idx = wp_idx.get(mid, 0)",
-        "        if idx >= len(wps): continue",
-        "        all_done = False",
-        "        obj = bpy.data.objects.get(f\"Occupant_{{int(mid):03d}}\")",
-        "        if not obj:",
-        "            wp_idx[mid] = idx + 1",
-        "            continue",
-        "        tx, ty, tz = wps[idx]",
-        "        dx = tx - obj.location.x",
-        "        dy = ty - obj.location.y",
-        "        dz = tz - obj.location.z",
-        "        dist = math.sqrt(dx*dx + dy*dy + dz*dz)",
-        "        if dist < THRESH:",
-        "            wp_idx[mid] = idx + 1",
-        "        else:",
-        "            factor = min(SPEED / dist, 1.0)",
-        "            obj.location.x += dx * factor",
-        "            obj.location.y += dy * factor",
-        "            obj.location.z += dz * factor",
-        "    for area in bpy.context.screen.areas:",
-        "        if area.type == \"VIEW_3D\": area.tag_redraw()",
-        "    if all_done:",
-        "        print(\"All cones reached assembly point\")",
-        "        return None",
-        "    return INTERVAL",
-        "",
-        "if bpy.app.timers.is_registered(_walk):",
-        "    bpy.app.timers.unregister(_walk)",
-        "bpy.app.timers.register(_walk, first_interval=0.1)",
-        "for area in bpy.context.screen.areas:",
-        "    if area.type == \"VIEW_3D\": area.tag_redraw()",
-        "print(f\"Walking {{len(all_paths)}} cones at fixed speed to assembly point\")",
-        "''')",
-        "    print('Escalation triggered — watch cones walk to assembly point')",
+        "    _s(",
+        "        'import bpy, json, math, os\\n'",
+        "        'RED = (0.90, 0.05, 0.05, 1.0)\\n'",
+        "        'for obj in bpy.data.objects:\\n'",
+        "        '    if obj.name.startswith(\"SignPanel_\") and obj.data and obj.data.materials:\\n'",
+        "        '        nd = obj.data.materials[0].node_tree.nodes.get(\"Principled BSDF\")\\n'",
+        "        '        if nd:\\n'",
+        "        '            nd.inputs[\"Base Color\"].default_value = RED\\n'",
+        "        '            if \"Emission Color\" in nd.inputs: nd.inputs[\"Emission Color\"].default_value = RED\\n'",
+        "        '            if \"Emission Strength\" in nd.inputs: nd.inputs[\"Emission Strength\"].default_value = 3.0\\n'",
+        "        '    if obj.name.startswith(\"SignText_\"):\\n'",
+        "        '        obj.data.body = \"ESCALATED\\\\nProceed to\\\\nAssembly Point\"\\n'",
+        f"        'PATHS_FILE = r\"{PATHS_FILE}\"\\n'",
+        "        'all_paths = {}\\n'",
+        "        'try:\\n'",
+        "        '    with open(PATHS_FILE) as fp: all_paths = json.load(fp)\\n'",
+        "        '    print(f\"Loaded paths for {len(all_paths)} cones\")\\n'",
+        "        'except Exception as e: print(f\"Path load error: {e}\")\\n'",
+        "        'ORANGE = (0.95, 0.55, 0.10, 1.0)\\n'",
+        "        'wp_idx = {mid: 0 for mid in all_paths}\\n'",
+        "        'for mid in all_paths:\\n'",
+        "        '    obj = bpy.data.objects.get(f\"Occupant_{int(mid):03d}\")\\n'",
+        "        '    if obj:\\n'",
+        "        '        obj.color = ORANGE\\n'",
+        "        '        if obj.data and obj.data.materials:\\n'",
+        "        '            bsdf = obj.data.materials[0].node_tree.nodes.get(\"Principled BSDF\")\\n'",
+        "        '            if bsdf:\\n'",
+        "        '                bsdf.inputs[\"Base Color\"].default_value = ORANGE\\n'",
+        "        '                bsdf.inputs[\"Emission Color\"].default_value = ORANGE\\n'",
+        "        'SPEED = 0.35\\n'",
+        "        'INTERVAL = 0.06\\n'",
+        "        'THRESH = 0.25\\n'",
+        "        'def _walk():\\n'",
+        "        '    all_done = True\\n'",
+        "        '    for mid, wps in all_paths.items():\\n'",
+        "        '        idx = wp_idx.get(mid, 0)\\n'",
+        "        '        if idx >= len(wps): continue\\n'",
+        "        '        all_done = False\\n'",
+        "        '        obj = bpy.data.objects.get(f\"Occupant_{int(mid):03d}\")\\n'",
+        "        '        if not obj: wp_idx[mid] = idx+1; continue\\n'",
+        "        '        tx,ty,tz = wps[idx]\\n'",
+        "        '        dx,dy,dz = tx-obj.location.x, ty-obj.location.y, tz-obj.location.z\\n'",
+        "        '        dist = math.sqrt(dx*dx+dy*dy+dz*dz)\\n'",
+        "        '        if dist < THRESH: wp_idx[mid] = idx+1\\n'",
+        "        '        else:\\n'",
+        "        '            f = min(SPEED/dist, 1.0)\\n'",
+        "        '            obj.location.x += dx*f\\n'",
+        "        '            obj.location.y += dy*f\\n'",
+        "        '            obj.location.z += dz*f\\n'",
+        "        '    for area in bpy.context.screen.areas:\\n'",
+        "        '        if area.type==\"VIEW_3D\": area.tag_redraw()\\n'",
+        "        '    if all_done: print(\"All cones reached assembly point\"); return None\\n'",
+        "        '    return INTERVAL\\n'",
+        "        'if bpy.app.timers.is_registered(_walk): bpy.app.timers.unregister(_walk)\\n'",
+        "        'bpy.app.timers.register(_walk, first_interval=0.2)\\n'",
+        "        'for area in bpy.context.screen.areas:\\n'",
+        "        '    if area.type==\"VIEW_3D\": area.tag_redraw()\\n'",
+        "        f'print(\"Walking cones to assembly point via {PATHS_FILE}\")\\n'",
+        "    )",
+        "    print('Escalation triggered')",
         "",
         "# ── RESET ─────────────────────────────────────────────────────",
         "def _reset():",
         "    from bim.ifc_bridge import send_to_blender as _s",
-        "    _s(r'''",
-        "import bpy",
-        "GREEN = (0.05, 0.70, 0.15, 1.0)",
-        "for obj in bpy.data.objects:",
-        "    if obj.name.startswith('SignPanel_') and obj.data and obj.data.materials:",
-        "        nd = obj.data.materials[0].node_tree.nodes.get('Principled BSDF')",
-        "        if nd:",
-        "            nd.inputs['Base Color'].default_value = GREEN",
-        "            if 'Emission Color' in nd.inputs: nd.inputs['Emission Color'].default_value = GREEN",
-        "            if 'Emission Strength' in nd.inputs: nd.inputs['Emission Strength'].default_value = 1.5",
-        "    if obj.name.startswith('SignText_'):",
-        "        obj.data.body = 'Status: CLEAR\\nAll routes open'",
-        "for area in bpy.context.screen.areas:",
-        "    if area.type == 'VIEW_3D': area.tag_redraw()",
-        "print('RESET: all signs GREEN')",
-        "''')",
+        "    _s(",
+        "        'import bpy\\n'",
+        "        'GREEN = (0.05, 0.70, 0.15, 1.0)\\n'",
+        "        'for obj in bpy.data.objects:\\n'",
+        "        '    if obj.name.startswith(\"SignPanel_\") and obj.data and obj.data.materials:\\n'",
+        "        '        nd = obj.data.materials[0].node_tree.nodes.get(\"Principled BSDF\")\\n'",
+        "        '        if nd:\\n'",
+        "        '            nd.inputs[\"Base Color\"].default_value = GREEN\\n'",
+        "        '            if \"Emission Color\" in nd.inputs: nd.inputs[\"Emission Color\"].default_value = GREEN\\n'",
+        "        '            if \"Emission Strength\" in nd.inputs: nd.inputs[\"Emission Strength\"].default_value = 1.5\\n'",
+        "        '    if obj.name.startswith(\"SignText_\"):\\n'",
+        "        '        obj.data.body = \"Status: CLEAR\\\\nAll routes open\"\\n'",
+        "        'for area in bpy.context.screen.areas:\\n'",
+        "        '    if area.type==\"VIEW_3D\": area.tag_redraw()\\n'",
+        "        'print(\"RESET: all signs GREEN\")\\n'",
+        "    )",
         "    print('Reset complete')",
         "",
         "# ── Operators ─────────────────────────────────────────────────",
@@ -319,7 +299,6 @@ def install_manager_panel():
         "    def draw(self, ctx):",
         "        l = self.layout",
         "        l.label(text='Click buttons bottom-left of viewport')",
-        "        l.label(text='Shift+E escalate  |  Shift+R reset')",
         "        l.separator()",
         "        r = l.row(); r.scale_y = 2.0; r.alert = True",
         "        r.operator('firesafety.escalate', text='ESCALATE', icon='ERROR')",
@@ -348,7 +327,9 @@ def install_manager_panel():
         "",
         "for area in bpy.context.screen.areas:",
         "    if area.type == 'VIEW_3D': area.tag_redraw()",
-        "print('Fire Safety UI ready — fixed-speed cone movement on ESCALATE')",
+        "print('Fire Safety UI ready')",
+        "print('  ESCALATE: paths saved to file, read by Blender timer')",
+        "print('  Fixed-speed movement — cones clearly visible walking')",
     ])
 
     return send_to_blender(blender_code)
