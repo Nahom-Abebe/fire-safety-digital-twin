@@ -5,7 +5,8 @@
 # Scenarios show localised occupancy violations and redirection:
 #   - Occupants move naturally (random walk)
 #   - When a room exceeds ADB capacity, it turns RED
-#   - Corridor sign updates with ADB Cl.2.43 citation
+#   - Physical corridor sign updates with clear occupant directions
+#   - Digital twin HUD board updates with ADB Cl.2.43 citations / escalation alerts
 #   - Occupants naturally disperse from overcrowded room
 #   - No evacuation, no fire alarm
 #
@@ -23,7 +24,7 @@ from bim.viewport_utils import frame_view_on_objects
 from bim.ifc_bridge import test_connection, send_to_blender
 
 # ── Synchronized Scenario Definitions ─────────────────────────────────────────
-# Aligned perfectly with tests/test_scenarios.py and fix_and_bake.py
+# Aligned perfectly with tests/test_scenarios.py and bim/animation_baker.py
 
 SCENARIOS = {
     "default": {
@@ -64,12 +65,13 @@ SCENARIOS = {
         "violation_room": "3-1",
         "ticks"         : 25,
         "seed"          : 4,
+        "mobility_node" : "3-1",
     },
 
     "TS-05": {
         "description"   : "Baseline — no violation (normal operation)",
         "violation_tick": 999,   # never triggers within 15 ticks
-        "violation_room": "0-4",
+        "violation_room": None,  # Explicit baseline representation
         "ticks"         : 15,
         "seed"          : 5,
     },
@@ -152,7 +154,7 @@ def main(scenario: str = "default",
          frame_delay: float = 0.08):
 
     print("=" * 60)
-    print(f"  BAKING ANIMATION — {scenario}")
+    print(f"   BAKING ANIMATION — {scenario}")
     print("=" * 60)
 
     # ── Connection check ───────────────────────────────────────────────
@@ -168,48 +170,54 @@ def main(scenario: str = "default",
     # ── Load scenario ──────────────────────────────────────────────────
     sc = SCENARIOS.get(scenario, SCENARIOS["default"])
     v_tick  = sc["violation_tick"]
-    v_room  = sc["violation_room"]
+    v_room  = sc.get("violation_room")
     n_ticks = sc["ticks"]
 
     print(f"\nScenario    : {scenario}")
     print(f"Description : {sc['description']}")
     print(f"Ticks       : {n_ticks}")
     print(f"Violation   : room {v_room} at tick "
-          f"{'none (baseline)' if v_tick >= 999 else v_tick}")
+          f"{'none (baseline)' if v_tick >= 999 or v_room is None else v_tick}")
     print(f"FPS         : {frames_per_tick} frames/tick")
     print(f"\nBaking keyframes (30–90s)...")
 
     result = bake_animation(
-        total_occupants = 80,
-        total_ticks     = n_ticks,
-        violation_tick  = v_tick,
-        violation_room  = v_room,
-        frames_per_tick = frames_per_tick,
-        seed            = sc["seed"],
+        total_occupants  = 80,
+        total_ticks      = n_ticks,
+        violation_tick   = v_tick,
+        violation_room   = v_room,
+        frames_per_tick  = frames_per_tick,
+        seed             = sc["seed"],
+        blocked_exits    = sc.get("blocked_exits"),
+        multi_violations = sc.get("multi_violations"),
+        mobility_node    = sc.get("mobility_node"),
     )
 
     if result.get("status") != "ok":
         print(f"\nFAILED: {result}")
         return
 
-    total           = result["total_frames"]
-    violation_frame = v_tick * frames_per_tick if v_tick < 999 else None
+    total             = result["total_frames"]
+    violation_frame = v_tick * frames_per_tick if (v_tick < 999 and v_room is not None) else None
 
     # ── Frame viewport on markers ──────────────────────────────────────
     frame_view_on_objects("Occupant_")
 
     # ── Summary ────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("  BAKE COMPLETE")
-    print(f"  Markers baked    : {result.get('markers_baked', 80)}")
-    print(f"  Floors baked     : {result.get('floors_baked', 4)}")
-    print(f"  Total frames     : 0 → {total} ({n_ticks} ticks)")
+    print("   BAKE COMPLETE")
+    print(f"   Markers baked    : {result.get('markers_baked', 80)}")
+    print(f"   Floors baked     : {result.get('floors_baked', 4)}")
+    print(f"   Total frames     : 0 → {total} ({n_ticks} ticks)")
     if violation_frame:
-        print(f"  Violation frame  : {violation_frame} (tick {v_tick})")
-        print(f"  IFC Pset         : ComplianceStatus=FAIL written for {v_room}")
-        print(f"  Sign updated     : ADB Cl.2.43 citation")
+        print(f"   Violation frame  : {violation_frame} (tick {v_tick})")
+        print(f"   IFC Pset         : ComplianceStatus=FAIL written for {v_room}")
+        print(f"   Corridor Sign    : Physical redirection active (occupant facing)")
+        print(f"   HUD Board        : ADB Cl.2.43 compliance alert displayed")
+        if sc.get("mobility_node"):
+            print(f"   Mobility Marker  : Occupant #{result.get('mobility_marker_id', 'N/A')} tracked at {sc['mobility_node']}")
     else:
-        print(f"  No violation     : baseline scenario (normal operation)")
+        print(f"   No violation     : baseline scenario (normal operation)")
     print("=" * 60)
 
     # ── Playback ───────────────────────────────────────────────────────

@@ -3,11 +3,13 @@
 #
 # Fixes applied:
 #   - Baseline guard: when violation_room is None or violation_tick >= 999,
-#     IFC Pset write and sign update are fully suppressed
-#   - ADB clause numbers removed from physical sign messages (board only)
-#   - _build_floor_colour_timeline handles None violation_room cleanly
-#   - _build_sign_states_timeline produces clean occupant-facing text
-#   - Indentation errors in original code corrected
+#     IFC Pset write and sign updates are fully suppressed
+#   - ADB clause numbers removed from physical sign messages (board display only)
+#   - _build_floor_colour_timeline handles None violation_room and fallbacks cleanly
+#   - _build_sign_states_timeline produces clean occupant-facing text for all states
+#   - Fixed HUD board state fallthrough where overcapacity alerts were bypassed if violation was None
+#   - Safe string formatting for Blender script path injection (prevents Windows escape errors)
+#   - Returns mobility_marker_id in return dictionary for scenario TS-04
 
 import json, os, random
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -109,7 +111,11 @@ def _build_floor_colour_timeline(timeline: list,
     violation_start_tick = None
     if violation_room is not None:
         for record in timeline:
-            if record["violation"] is not None:
+            if record.get("violation") is not None:
+                violation_start_tick = record["tick"]
+                break
+            alerts = record.get("snapshot", {}).get("alerts", [])
+            if any(a.get("severity") == "OVER" for a in alerts):
                 violation_start_tick = record["tick"]
                 break
 
@@ -125,7 +131,7 @@ def _build_floor_colour_timeline(timeline: list,
                 floor_keys[floor_name].append((frame, 0.05, 0.70, 0.15))
             continue
 
-        alerts = record["snapshot"].get("alerts", [])
+        alerts = record.get("snapshot", {}).get("alerts", [])
 
         over_floors = set()
         if tick >= violation_start_tick:
@@ -167,7 +173,11 @@ def _build_sign_states_timeline(timeline: list,
     violation_start_tick = None
     if violation_room is not None:
         for record in timeline:
-            if record["violation"] is not None:
+            if record.get("violation") is not None:
+                violation_start_tick = record["tick"]
+                break
+            alerts = record.get("snapshot", {}).get("alerts", [])
+            if any(a.get("severity") == "OVER" for a in alerts):
                 violation_start_tick = record["tick"]
                 break
 
@@ -179,12 +189,11 @@ def _build_sign_states_timeline(timeline: list,
 
         # Baseline — all signs show clear
         if violation_room is None or violation_start_tick is None:
-            frame_signs = {sid: f"{fl.replace(' Floor','').replace(' Ground','').replace(' First','').replace(' Second','').replace(' Third','')} — All Clear"
-                          for fl, sid in FLOOR_SIGNS.items()}
+            frame_signs = {sid: "Status: CLEAR\nAll routes open" for sid in FLOOR_SIGNS.values()}
             sign_timeline.append(frame_signs)
             continue
 
-        alerts = record["snapshot"].get("alerts", [])
+        alerts = record.get("snapshot", {}).get("alerts", [])
 
         in_monitor = (
             tick >= violation_start_tick and
@@ -202,7 +211,6 @@ def _build_sign_states_timeline(timeline: list,
         frame_signs = {}
         for fl_name, sign_id in FLOOR_SIGNS.items():
             if (in_monitor and fl_name == violation_floor) or fl_name in over_floors:
-                # Simple occupant-facing message — no ADB clause on physical sign
                 frame_signs[sign_id] = (
                     f"Room {violation_room} is full\n"
                     f"Please use alternative areas"
@@ -214,8 +222,8 @@ def _build_sign_states_timeline(timeline: list,
     return sign_timeline
 
 
-def _build_board_text(snap: dict, violation, violation_room) -> str:
-    """Board text for one tick — ADB citations go here, not on signs."""
+def _build_board_text(snap: dict, violation, violation_room, escalated_alert: str = None) -> str:
+    """Board text for one tick — ADB citations go here, not on physical signs."""
     lines = [
         "FIRE SAFETY DIGITAL TWIN",
         f"Tick: {snap['tick']}",
@@ -236,19 +244,26 @@ def _build_board_text(snap: dict, violation, violation_room) -> str:
 
     lines.append("")
 
-    if violation and snap.get("alerts"):
-        over_rooms = [a for a in snap["alerts"] if a["severity"] == "OVER"]
-        if over_rooms:
-            lines.append(f"OVERCAPACITY ({len(over_rooms)}):")
-            for a in over_rooms[:3]:
-                lines.append(f"  {a['label']}: {a['current']}/{a['max']}"
-                             f" (ADB Cl.2.43)")
-        else:
-            lines.append(f"Monitoring: {violation_room}")
-            lines.append("Status: Occupancy within limits")
+    # Priority 1: High-priority mobility / assistance escalation alert
+    if escalated_alert:
+        lines.append("STATUS: ESCALATED ALERT")
+        lines.append(f"  {escalated_alert}")
+    # Priority 2: Standard ADB overcapacity alerts
+    elif snap.get("alerts") and any(a.get("severity") == "OVER" for a in snap.get("alerts", [])):
+        over_rooms = [a for a in snap["alerts"] if a.get("severity") == "OVER"]
+        lines.append(f"OVERCAPACITY ({len(over_rooms)}):")
+        for a in over_rooms[:3]:
+            lines.append(f"  {a['label']}: {a['current']}/{a['max']}"
+                         f" (ADB Cl.2.43)")
+    # Priority 3: Active redirection in progress
     elif violation:
-        lines.append(f"Monitoring: {violation['node_label']}")
+        node_lbl = violation.get("node_label", violation_room) if isinstance(violation, dict) else str(violation)
+        lines.append(f"Monitoring: {node_lbl}")
         lines.append("Status: Redirecting occupants")
+    elif violation_room:
+        lines.append(f"Monitoring: {violation_room}")
+        lines.append("Status: Occupancy within limits")
+    # Priority 4: All normal
     else:
         lines.append("Status: NORMAL — all rooms compliant")
 
@@ -283,7 +298,6 @@ def _update_signs_for_violation(violation_room: str, violation_floor: str):
     """
     Updates corridor sign for affected floor.
     Message is simple occupant-facing text — no ADB clause numbers on signs.
-    ADB citations go on the board and in the logs only.
     """
     sign_id = FLOOR_SIGNS.get(violation_floor)
     if not sign_id:
@@ -334,17 +348,39 @@ def bake_animation(total_occupants: int = 80,
     node_to_label  = {n: d["label"] for n, d in G.nodes(data=True)}
     node_to_floor  = {n: d["floor"]  for n, d in G.nodes(data=True)}
     label_to_floor = {d["label"]: d["floor"] for _, d in G.nodes(data=True)}
-    violation_floor = (label_to_floor.get(violation_room, "")
+    
+    violation_floor = (label_to_floor.get(violation_room, "") or label_to_floor.get(mobility_node, "")
                        if not is_baseline else "")
 
     violation_start_tick = None
     if not is_baseline:
         for record in timeline:
-            if record["violation"] is not None:
+            if record.get("violation") is not None:
+                violation_start_tick = record["tick"]
+                break
+            alerts = record.get("snapshot", {}).get("alerts", [])
+            if any(a.get("severity") == "OVER" for a in alerts):
                 violation_start_tick = record["tick"]
                 break
 
     MONITOR_TICKS = 8
+
+    # Identify mobility marker ID if mobility_node is requested
+    mobility_marker_id = 38  # Default fallback
+    if mobility_node and len(timeline) > 0:
+        mobility_target_node = next((n for n, d in G.nodes(data=True) if d["label"] == mobility_node), None)
+        initial_nodes = timeline[0]["agent_nodes"]
+        if mobility_target_node in initial_nodes:
+            mobility_marker_id = initial_nodes.index(mobility_target_node)
+        else:
+            for record in timeline:
+                if mobility_target_node in record["agent_nodes"]:
+                    mobility_marker_id = record["agent_nodes"].index(mobility_target_node)
+                    break
+
+    # ── Ensure mobility marker index is within range of active occupants ──
+    if mobility_marker_id >= total_occupants:
+        mobility_marker_id = max(0, total_occupants - 1)
 
     # ── Occupant marker keyframes ─────────────────────────────────────────
     print("  Building occupant keyframes...")
@@ -353,10 +389,10 @@ def bake_animation(total_occupants: int = 80,
 
     for record in timeline:
         tick      = record["tick"]
-        violation = record["violation"]
+        violation = record.get("violation")
         nodes     = record["agent_nodes"]
         frame     = tick * frames_per_tick
-        alerts    = record["snapshot"].get("alerts", [])
+        alerts    = record.get("snapshot", {}).get("alerts", [])
 
         over_rooms  = set()
         over_floors = set()
@@ -391,9 +427,24 @@ def bake_animation(total_occupants: int = 80,
 
             marker_keys[marker_id].append([frame, x, y, z, *colour])
 
+        # Construct dynamic escalation message for the HUD Board
+        escalated_alert = None
+        if not is_baseline and violation_start_tick is not None and tick >= violation_start_tick:
+            if mobility_node:
+                fl_display = (violation_floor.replace("Third Floor", "3rd floor")
+                                             .replace("Second Floor", "2nd floor")
+                                             .replace("First Floor", "1st floor")
+                                             .replace("Ground Floor", "ground floor"))
+                escalated_alert = f"Wheelchair user awaiting staff help on {fl_display} ({violation_room})"
+
         board_texts.append(
-            _build_board_text(record["snapshot"], violation,
-                              violation_room if not is_baseline else None))
+            _build_board_text(
+                record["snapshot"],
+                violation,
+                violation_room if not is_baseline else None,
+                escalated_alert=escalated_alert
+            )
+        )
 
     # ── Floor & sign timelines ────────────────────────────────────────────
     print("  Building floor colour & sign state keyframes...")
@@ -403,7 +454,6 @@ def bake_animation(total_occupants: int = 80,
         timeline, None if is_baseline else violation_room)
 
     # ── IFC Pset + sign updates ───────────────────────────────────────────
-    # BASELINE GUARD: fully suppressed when is_baseline=True
     if is_baseline:
         print("  Baseline scenario — IFC Pset write suppressed")
         print("  Corridor sign updates suppressed")
@@ -422,20 +472,20 @@ def bake_animation(total_occupants: int = 80,
     # ── Write payload to disk ─────────────────────────────────────────────
     with open(INPUT_FILE, "w", encoding="utf-8") as f:
         json.dump({
-            "marker_keys"      : marker_keys,
-            "board_texts"      : board_texts,
-            "sign_states"      : sign_states,
-            "floor_keys"       : floor_keys,
-            "floor_collections": FLOOR_COLLECTIONS,
-            "skip_prefixes"    : list(SKIP_PREFIXES),
-            "frames_per_tick"  : frames_per_tick,
-            "total_frames"     : total_frames,
+            "marker_keys"       : marker_keys,
+            "board_texts"       : board_texts,
+            "sign_states"       : sign_states,
+            "floor_keys"        : floor_keys,
+            "floor_collections" : FLOOR_COLLECTIONS,
+            "skip_prefixes"     : list(SKIP_PREFIXES),
+            "frames_per_tick"   : frames_per_tick,
+            "total_frames"      : total_frames,
         }, f)
 
     if os.path.exists(RESULT_FILE):
         os.remove(RESULT_FILE)
 
-    # ── Blender bake script ───────────────────────────────────────────────
+    # ── Blender bake script template ──────────────────────────────────────
     code_template = """
 import bpy, bmesh, json, traceback
 
@@ -448,7 +498,7 @@ def _set_emission(bsdf_node, color, strength=2.0):
         bsdf_node.inputs['Emission Strength'].default_value = strength
 
 try:
-    with open(r"__INPUT_FILE__", "r", encoding="utf-8") as f:
+    with open(__INPUT_FILE_JSON__, "r", encoding="utf-8") as f:
         payload = json.load(f)
 
     marker_keys     = payload["marker_keys"]
@@ -543,8 +593,8 @@ try:
         mesh = bpy.data.meshes.new(name + '_m')
         bm   = bmesh.new()
         bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False,
-                               segments=8, radius1=0.40,
-                               radius2=0.08, depth=2.5)
+                              segments=8, radius1=0.40,
+                              radius2=0.08, depth=2.5)
         bm.to_mesh(mesh); bm.free()
         return bpy.data.objects.new(name, mesh)
 
@@ -639,7 +689,7 @@ try:
         fpt   = scn.get('fs_frames_per_tick', 24)
         if not texts: return
         data = json.loads(texts)
-        idx  = max(0, min(scn.frame_current // fpt, len(data) - 1))
+        idx   = max(0, min(scn.frame_current // fpt, len(data) - 1))
         b = bpy.data.objects.get('FireSafetyBoard')
         if b: b.data.body = data[idx]
         sign_data_str = scn.get('fs_sign_states')
@@ -651,11 +701,12 @@ try:
                 if sobj and hasattr(sobj.data, 'body'):
                     sobj.data.body = text_val
 
-    existing = [fn for fn in bpy.app.handlers.frame_change_pre
-                if fn.__name__ == '_board_handler']
-    for fn in existing:
-        bpy.app.handlers.frame_change_pre.remove(fn)
-    bpy.app.handlers.frame_change_pre.append(_board_handler)
+    for handler_list in (bpy.app.handlers.frame_change_pre, bpy.app.handlers.frame_change_post):
+        existing = [fn for fn in handler_list if fn.__name__ == '_board_handler']
+        for fn in existing:
+            handler_list.remove(fn)
+        handler_list.append(_board_handler)
+
     _board_handler(scene)
 
     # PART 4 — Reset frame & redraw
@@ -677,20 +728,21 @@ except Exception as e:
         'trace'  : traceback.format_exc()
     }
 
-with open(r"__RESULT_FILE__", 'w', encoding='utf-8') as f:
+with open(__RESULT_FILE_JSON__, 'w', encoding='utf-8') as f:
     json.dump(report, f)
 print('Bake complete:', report.get('status'))
 """
     code = (code_template
-            .replace("__INPUT_FILE__",  INPUT_FILE)
-            .replace("__RESULT_FILE__", RESULT_FILE))
+            .replace("__INPUT_FILE_JSON__",  json.dumps(INPUT_FILE))
+            .replace("__RESULT_FILE_JSON__", json.dumps(RESULT_FILE)))
 
     print("  Sending to Blender (30-90s)...")
     send_to_blender(code)
     result = _read_result(timeout=300.0)
-    result["total_ticks"]     = total_ticks
-    result["frames_per_tick"] = frames_per_tick
-    result["total_frames"]    = total_frames
-    result["violation_room"]  = violation_room
-    result["violation_tick"]  = violation_tick
+    result["total_ticks"]        = total_ticks
+    result["frames_per_tick"]    = frames_per_tick
+    result["total_frames"]       = total_frames
+    result["violation_room"]     = violation_room
+    result["violation_tick"]     = violation_tick
+    result["mobility_marker_id"] = mobility_marker_id
     return result
