@@ -3,7 +3,7 @@
 
 A Blender + IFC digital twin for care home occupancy management, built on top of [Bonsai-mcp](https://github.com/JotaDeRodriguez/Bonsai_mcp). The system reads a live IFC/BIM model, simulates occupant movement through the building graph, and drives an autonomous agent that checks occupancy against Approved Document B (ADB) fire safety guidance and updates corridor signage in real time.
 
-This is **not** an evacuation model. Following the project brief, the system does not simulate fire, alarms, or biased movement toward exits. Instead it identifies when a room's occupancy exceeds a safe threshold and redirects occupants toward alternative spaces — an occupancy management twin, not an evacuation planner.
+This is not an evacuation model. Following the project brief, the system does not simulate fire, alarms, or biased movement toward exits. Instead it identifies when a room's occupancy exceeds a safe threshold and redirects occupants toward alternative spaces — an occupancy management twin, not an evacuation planner.
 
 ## Features
 
