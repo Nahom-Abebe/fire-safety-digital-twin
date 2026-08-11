@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Fire Safety Digital Twin — Occupancy Management System
 
 A Blender + IFC digital twin for care home occupancy management, built on top of [Bonsai-mcp](https://github.com/JotaDeRodriguez/Bonsai_mcp). The system reads a live IFC/BIM model, simulates occupant movement through the building graph, and drives an autonomous agent that checks occupancy against Approved Document B (ADB) fire safety guidance and updates corridor signage in real time.
