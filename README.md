@@ -68,6 +68,10 @@ python phase1_setup.py
 
 # Run a baked demo scenario — repeatable, no API cost
 python fix_and_bake.py --scenario TS-01 --fps 12 --speed 0.08
+python fix_and_bake.py --scenario TS-02 --fps 12 --speed 0.08
+python fix_and_bake.py --scenario TS-03 --fps 12 --speed 0.08
+python fix_and_bake.py --scenario TS-04 --fps 12 --speed 0.08
+python fix_and_bake.py --scenario TS-05 --fps 12 --speed 0.08
 
 # Run the live compliance agent against the model (uses the Anthropic API)
 python live_agent_runner.py --ticks 15 --delay 2.0 --sense-every 3 --seed 3
