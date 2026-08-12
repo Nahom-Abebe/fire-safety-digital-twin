@@ -1,15 +1,6 @@
 # live_agent_runner.py
 # Live occupancy management agent — runs the simulation tick by tick
 # and lets Claude reason about what it sees in real time.
-#
-# Fixes applied in this version:
-#   - Smooth cone marker interpolation across simulation ticks
-#   - Cleaned HUD formatting: Strips Markdown tags (**), auto-wraps lines, caps max height
-#   - System prompt optimization: Directs agent to write concise plain text for the HUD
-#   - Fixed floor colour persistence: floors revert to GREEN when violations clear
-#   - Optimized Blender IPC: floor colours only updated when floor states change
-#   - Unified default seed across CLI and function signature (default 16)
-#   - Added try-except wrapper around Blender IPC calls to prevent tick loop crashes
 
 import sys, os, json, time, argparse, textwrap, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

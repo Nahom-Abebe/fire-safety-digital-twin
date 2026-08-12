@@ -1,7 +1,6 @@
 # make_building_transparent.py
 # Makes the building shell semi-transparent so occupant markers
 # are visible inside rooms from any camera angle.
-# Run once before recording your demo video.
 # Run reset_building_opacity.py to restore full opacity.
 
 import sys, os

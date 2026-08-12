@@ -1,18 +1,8 @@
 # fix_and_bake.py
 # Clears conflicting materials, bakes occupancy management animation,
 # then drives it as a TRUE digital twin — every visible signal (board text,
-# the four primary corridor signs, and scenario-specific extra signs)
-# is derived from the live per-tick simulation output, not from fixed
-# strings pinned to a chosen frame number.
-#
-# Architectural Refinements:
-#   - Primary display board & 4 primary corridor signs: Owned and driven 
-#     reactively by animation_baker's registered Blender frame handler.
-#   - Extra signs (south exit, zone-clear, stairwell): Computed from the 
-#     deterministic simulation timeline and updated lazily during playback 
-#     only when visual state transitions occur.
-#   - Wheelchair occupant: Identified purely by mesh color and an attached label.
-#     No artificial keyframing, trajectory freezing, or force-scaling.
+# the four primary corridor signs, and the scenario-specific extra signs)
+# is derived from the live per-tick simulation output.
 
 import sys, os, time, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -23,7 +13,11 @@ from bim.viewport_utils import frame_view_on_objects
 from sensors.agent_walk import simulate_agent_timeline
 from sensors.building_graph import BUILDING_GRAPH as G
 
-# ── Scenario Configuration Specifications ──────────────────────────────────────
+# ── Scenario definitions ──────────────────────────────────────────────────────
+# These declare CONFIGURATION for the simulation (which room, which exits
+# are blocked, which extra rooms fail, which occupant is mobility
+# constrained) — not pre-written outcomes. Everything the twin shows is
+# computed from this configuration at run time.
 SCENARIOS = {
     "default": {
         "description"     : "Ground floor bedroom 0-4 approaches capacity",
@@ -32,7 +26,6 @@ SCENARIOS = {
         "ticks"           : 25,
         "seed"            : 42,
         "adb_ref"         : "ADB Clause 2.43 — bedroom max occupancy",
-        "wheelchair"      : False,
         "blocked_exits"   : [],
         "multi_violations": [],
         "mobility_node"   : None,
@@ -46,7 +39,6 @@ SCENARIOS = {
         "ticks"           : 20,
         "seed"            : 1,
         "adb_ref"         : "ADB Clause 2.43 — bedroom max occupancy care home",
-        "wheelchair"      : False,
         "blocked_exits"   : [],
         "multi_violations": [],
         "mobility_node"   : None,
@@ -61,13 +53,14 @@ SCENARIOS = {
         "ticks"           : 20,
         "seed"            : 2,
         "adb_ref"         : "ADB Table 2.1 — max travel distance 18m escape route",
-        "wheelchair"      : False,
         "blocked_exits"   : ["EXIT-1"],
         "multi_violations": [],
         "mobility_node"   : None,
+        # South corridor sign is not one of the 4 primary FLOOR_SIGNS,
+        # so it is driven reactively by this file from real occupancy data.
         "extra_sign_kind" : "opposite_exit",
         "extra_sign_id"   : "SIGN_F0_CORRIDOR_S",
-        "note"            : "EXIT-1 blocked from tick 0 in simulation — occupants route around south exit",
+        "note"            : "EXIT-1 blocked from tick 0 in the simulation — occupants genuinely avoid it",
     },
 
     "TS-03": {
@@ -77,28 +70,32 @@ SCENARIOS = {
         "ticks"           : 25,
         "seed"            : 3,
         "adb_ref"         : "ADB Clause 2.43 — bedroom occupancy | Section 2.33 — care home",
-        "wheelchair"      : False,
         "blocked_exits"   : [],
         "multi_violations": [{"room": "3-14", "tick": 4}],
         "mobility_node"   : None,
+        # Zone-clear signs on F0/F1/F2 report the REAL per-tick alert
+        # state of each floor, not a fixed "all clear" string.
         "extra_sign_kind" : "zone_clear_other_floors",
-        "note"            : "Rooms 3-1 + 3-14 both overcrowded simultaneously — evaluated live per tick",
+        "note"            : "Rooms 3-1 + 3-14 both overcrowded simultaneously — modelled in the walk itself",
     },
 
     "TS-04": {
-        "description"     : "Mobility constraint — wheelchair user on F3, stairwell avoided in walk",
+        "description"     : "Mobility constraint — wheelchair user on F3, stairwell avoided in the walk",
         "violation_tick"  : 2,
         "violation_room"  : "3-10",
         "ticks"           : 25,
         "seed"            : 7,
         "adb_ref"         : "ADB Sections 3.5-3.6 — wheelchair refuge provisions",
-        "wheelchair"      : True,
         "blocked_exits"   : [],
         "multi_violations": [],
         "mobility_node"   : "3-10",
+        "mobility_refuge" : True,
+        # Stairwell sign reports whether the tracked mobility marker
+        # currently needs to avoid stairs — tied to the real violation
+        # state, not a pinned frame.
         "extra_sign_kind" : "stairwell",
         "extra_sign_id"   : "SIGN_F3_STAIR",
-        "note"            : "Wheelchair marker's stair-avoidance is a pathfinder bias, not a scripted freeze",
+        "note"            : "Wheelchair marker's stair-avoidance is a live bias in the walk, not a scripted freeze",
     },
 
     "TS-05": {
@@ -108,12 +105,11 @@ SCENARIOS = {
         "ticks"           : 15,
         "seed"            : 5,
         "adb_ref"         : "",
-        "wheelchair"      : False,
         "blocked_exits"   : [],
         "multi_violations": [],
         "mobility_node"   : None,
         "extra_sign_kind" : None,
-        "note"            : "40 occupants — zero violations, board and signs stay CLEAR/IDLE every tick",
+        "note"            : "40 occupants — zero violations, zero sign updates, board stays IDLE every tick",
     },
 }
 
@@ -128,14 +124,13 @@ RED   = [0.90, 0.05, 0.05, 1.0]
 GREEN = [0.05, 0.70, 0.15, 1.0]
 
 
-def _is_baseline(sc: dict) -> bool:
+def _is_baseline(sc):
     return sc["violation_tick"] >= 999 or sc["violation_room"] is None
 
 
-# ── Blender Helpers ───────────────────────────────────────────────────────────
+# ── Blender helpers ───────────────────────────────────────────────────────────
 
 def _clear_materials_and_set_viewport():
-    """Removes dynamic runtime materials and resets 3D viewport display flags."""
     send_to_blender("""
 import bpy
 removed = 0
@@ -143,22 +138,19 @@ for mat in list(bpy.data.materials):
     if mat.name.startswith('LIVE_') or mat.name.startswith('FS_FLOOR_'):
         bpy.data.materials.remove(mat)
         removed += 1
-
 for area in bpy.context.screen.areas:
     if area.type == 'VIEW_3D':
         for space in area.spaces:
             if space.type == 'VIEW_3D':
-                space.shading.type         = 'SOLID'
-                space.shading.color_type   = 'OBJECT'
+                space.shading.type       = 'SOLID'
+                space.shading.color_type = 'OBJECT'
                 space.shading.show_shadows = False
         area.tag_redraw()
-
 print(f'Cleared {removed} conflicting materials')
 """)
 
 
 def _cleanup_old_tags():
-    """Removes previously instantiated wheelchair text labels and materials."""
     send_to_blender("""
 import bpy
 count = 0
@@ -166,47 +158,39 @@ for obj in list(bpy.data.objects):
     if 'WheelchairLabel' in obj.name:
         bpy.data.objects.remove(obj, do_unlink=True)
         count += 1
-
 for mat in list(bpy.data.materials):
     if mat.name in ('WheelchairMat', 'WCLabelMat'):
         bpy.data.materials.remove(mat)
-
 print(f'Cleaned up {count} old wheelchair tags')
 """)
 
 
 def _reset_all_sign_panels_green():
-    """Resets all SignPanel_ and SignText_ objects across the scene to baseline state."""
+    """Resets every SignPanel_ object (primary AND extra) to GREEN/CLEAR."""
     send_to_blender("""
 import bpy
 GREEN = [0.05, 0.70, 0.15, 1.0]
 count = 0
-
 for obj in bpy.data.objects:
     if obj.name.startswith('SignPanel_') and obj.data and obj.data.materials:
         mat  = obj.data.materials[0]
         node = mat.node_tree.nodes.get('Principled BSDF')
         if node:
-            node.inputs['Base Color'].default_value          = GREEN
-            node.inputs['Emission Color'].default_value      = GREEN
-            node.inputs['Emission Strength'].default_value   = 1.5
+            node.inputs['Base Color'].default_value     = GREEN
+            node.inputs['Emission Color'].default_value  = GREEN
+            node.inputs['Emission Strength'].default_value = 1.5
         count += 1
     if obj.name.startswith('SignText_'):
         obj.data.body = 'CLEAR\\nAll routes open'
-
 for area in bpy.context.screen.areas:
-    if area.type == 'VIEW_3D': 
-        area.tag_redraw()
-
+    if area.type == 'VIEW_3D': area.tag_redraw()
 print(f'Reset {count} sign panels to GREEN')
 """)
 
 
 def _update_sign_panel(sign_id: str, lines: list, colour: list):
-    """
-    Updates an extra sign panel (e.g. South Exit, Stairwell, or secondary floor status).
-    Executes on demand when state transitions are detected during playback.
-    """
+    """Updates ONE sign panel. Used only for extra signs not owned by
+    animation_baker's live handler (south exit, zone-clear, stairwell)."""
     if not lines:
         return
     body       = "\\n".join(lines)
@@ -218,29 +202,29 @@ panel = bpy.data.objects.get('SignPanel_{sign_id}')
 if not panel:
     panel = bpy.data.objects.get('{sign_id}')
 txt   = bpy.data.objects.get('SignText_{sign_id}')
-
 if panel and panel.data and panel.data.materials:
     mat  = panel.data.materials[0]
     node = mat.node_tree.nodes.get('Principled BSDF')
     if node:
-        node.inputs['Base Color'].default_value          = COL
-        node.inputs['Emission Color'].default_value      = COL
-        node.inputs['Emission Strength'].default_value   = 2.5
-
+        node.inputs['Base Color'].default_value     = COL
+        node.inputs['Emission Color'].default_value  = COL
+        node.inputs['Emission Strength'].default_value = 2.5
 if txt:
     txt.data.body = '{body}'
     txt.data.size = 0.08
-
 for area in bpy.context.screen.areas:
-    if area.type == 'VIEW_3D': 
-        area.tag_redraw()
+    if area.type == 'VIEW_3D': area.tag_redraw()
 """)
 
 
 def _mark_wheelchair_user(mobility_marker_id: int):
     """
-    Highlights the specific agent cone designated by the mobility engine and 
-    parents a 'WC User' 3D label to track its location throughout playback.
+    Colours the exact wheelchair cone (from the real mobility_marker_id
+    returned by the bake) purple, and parents a 'WC User' label to it
+    so the label follows the cone through every animation frame.
+    This only IDENTIFIES which live cone is the tracked occupant — it
+    does not alter that cone's movement, which is already biased away
+    from stairwells inside sensors/agent_walk.py.
     """
     cone_name = f"Occupant_{mobility_marker_id:03d}"
     send_to_blender(f"""
@@ -267,7 +251,6 @@ if wc:
     txt_data.body    = 'WC User'
     txt_data.size    = 0.40
     txt_data.align_x = 'CENTER'
-    
     tmat = bpy.data.materials.new('WCLabelMat')
     tmat.use_nodes = True
     tn = tmat.node_tree.nodes.get('Principled BSDF')
@@ -277,7 +260,6 @@ if wc:
             tn.inputs['Emission Color'].default_value = (1.0, 1.0, 1.0, 1.0)
         if 'Emission Strength' in tn.inputs:
             tn.inputs['Emission Strength'].default_value = 4.0
-            
     txt_data.materials.clear()
     txt_data.materials.append(tmat)
 
@@ -289,31 +271,43 @@ if wc:
     txt_obj.parent_type    = 'OBJECT'
 
     for area in bpy.context.screen.areas:
-        if area.type == 'VIEW_3D': 
-            area.tag_redraw()
-    print(f'Wheelchair cone marked: {{cone_name}}')
+        if area.type == 'VIEW_3D': area.tag_redraw()
+    print(f'Wheelchair cone identified: {{cone_name}}')
 else:
     print(f'Cone not found: {{cone_name}}')
 """)
 
 
 def _jump_to_frame(frame: int):
-    """Sets the active timeline frame in Blender."""
     send_to_blender(f"""
 import bpy
 bpy.context.scene.frame_set({frame})
 for area in bpy.context.screen.areas:
-    if area.type == 'VIEW_3D': 
-        area.tag_redraw()
+    if area.type == 'VIEW_3D': area.tag_redraw()
 """)
 
 
-# ── Reactive Extra-Sign Schedule Generator ─────────────────────────────────────
+# ── Reactive extra-sign schedule ───────────────────────────────────────────────
+# Re-runs the SAME deterministic simulation used for the bake (identical
+# seed and parameters => identical result) purely in Python, so we can
+# read real per-tick alerts and derive extra-sign state from them.
+# This is the mechanism that makes the extra signs (south exit,
+# zone-clear, stairwell) reactive rather than pinned text.
 
-def _build_extra_sign_schedule(sc: dict, total_occupants: int) -> list:
+def _build_extra_sign_schedule(sc: dict, total_occupants: int,
+                               effective_mobility_node: str = None,
+                               mobility_refuge: bool = False) -> list:
     """
-    Evaluates the deterministic simulation timeline to produce a per-tick status
-    schedule for scenario-specific extra signs (e.g. South exit, stairwell alerts).
+    Returns a list of length total_ticks+1. Each entry is either None
+    (no extra sign for this scenario / this tick unchanged from clear)
+    or a dict {sign_id: (lines, colour)} describing what the extra
+    sign(s) should show at that tick, computed from real simulation state.
+
+    effective_mobility_node AND mobility_refuge MUST both match whatever
+    was passed to the actual bake_animation() call — same seed + same
+    mobility parameters reproduces the exact same walk, since the
+    mobility marker's bias changes which node every subsequent rng draw
+    resolves to for that agent.
     """
     kind = sc.get("extra_sign_kind")
     if kind is None:
@@ -322,25 +316,32 @@ def _build_extra_sign_schedule(sc: dict, total_occupants: int) -> list:
     timeline = simulate_agent_timeline(
         total_occupants  = total_occupants,
         total_ticks      = sc["ticks"],
-        violation_tick   = sc["violation_tick"],
-        violation_room   = sc["violation_room"],
-        seed             = sc["seed"],
-        blocked_exits    = sc.get("blocked_exits", []),
-        multi_violations = sc.get("multi_violations", []),
-        mobility_node    = sc.get("mobility_node"),
+        violation_tick    = sc["violation_tick"],
+        violation_room    = sc["violation_room"],
+        seed              = sc["seed"],
+        blocked_exits     = sc.get("blocked_exits", []),
+        multi_violations  = sc.get("multi_violations", []),
+        mobility_node     = effective_mobility_node,
+        mobility_refuge   = mobility_refuge,
     )
 
     label_to_floor = {d["label"]: d["floor"] for _, d in G.nodes(data=True)}
     schedule = []
 
     for record in timeline:
-        snap   = record["snapshot"]
+        snap  = record["snapshot"]
         alerts = snap.get("alerts", [])
-        entry  = {}
+        entry = {}
 
         if kind == "opposite_exit":
+            # South exit becomes the active route once the violation
+            # triggers — gated the same way as the primary north sign,
+            # so both signs change together at the scripted tick rather
+            # than the south sign announcing "OPEN / primary route"
+            # from frame 0 before anything has actually happened.
             sign_id = sc["extra_sign_id"]
-            if sc.get("blocked_exits"):
+            tick    = record["tick"]
+            if sc.get("blocked_exits") and tick >= sc["violation_tick"]:
                 entry[sign_id] = (
                     ["South Exit OPEN", "Primary route", "Proceed now"],
                     GREEN,
@@ -352,12 +353,10 @@ def _build_extra_sign_schedule(sc: dict, total_occupants: int) -> list:
             v_floor = label_to_floor.get(sc["violation_room"], "")
             for fl_name, sign_id in FLOOR_SIGNS.items():
                 if fl_name == v_floor:
-                    continue  # Primary corridor sign managed directly by animation_baker
-                floor_alerts = [
-                    a for a in alerts
-                    if a.get("severity") == "OVER"
-                    and label_to_floor.get(a.get("label", "")) == fl_name
-                ]
+                    continue  # primary sign already owned by animation_baker
+                floor_alerts = [a for a in alerts
+                                if a.get("severity") == "OVER"
+                                and label_to_floor.get(a.get("label", "")) == fl_name]
                 if floor_alerts:
                     a = floor_alerts[0]
                     entry[sign_id] = (
@@ -376,19 +375,16 @@ def _build_extra_sign_schedule(sc: dict, total_occupants: int) -> list:
                     )
 
         elif kind == "stairwell":
-            sign_id  = sc["extra_sign_id"]
-            in_alert = any(
-                a.get("label") == sc["violation_room"] and a.get("severity") == "OVER"
-                for a in alerts
-            )
-            if in_alert:
-                mob_id = record.get("mobility_marker_id")
-                room_now = "?"
-                if mob_id is not None:
-                    node_now = record["agent_nodes"][mob_id]
-                    room_now = G.nodes[node_now]["label"]
+            sign_id = sc["extra_sign_id"]
+            ms      = snap.get("mobility_status")
+            in_alert = any(a.get("label") == sc["violation_room"]
+                           and a.get("severity") == "OVER"
+                           for a in alerts)
+            if in_alert and ms:
+                status = "at refuge" if ms["at_refuge"] else "en route to refuge"
                 entry[sign_id] = (
-                    ["Stairwell B", "Not accessible", f"WC user near {room_now}"],
+                    ["Stairwell B", "Not accessible",
+                     f"WC user {status}: {ms['room']}"],
                     RED,
                 )
             else:
@@ -399,10 +395,15 @@ def _build_extra_sign_schedule(sc: dict, total_occupants: int) -> list:
     return schedule
 
 
-def _drive_animation(total_frames: int, frames_per_tick: int, frame_delay: float, extra_schedule: list):
+def _drive_animation(total_frames: int, frames_per_tick: int, frame_delay: float,
+                     extra_schedule: list):
     """
-    Drives timeline playback frame-by-frame. Frame changes trigger the registered 
-    Blender handler to update main UI elements. Extra signs update lazily upon state changes.
+    Steps through every frame. Setting the frame triggers animation_baker's
+    registered handler, which rewrites the board and all four primary
+    corridor signs from the real baked per-tick data — nothing here
+    touches those. Only the scenario's extra sign(s), if any, are pushed
+    here, and only when the tick's computed state differs from the last
+    tick pushed (avoids redundant socket calls, not a fixed trigger frame).
     """
     print(f"\nDriving animation ({total_frames} frames at {frame_delay}s/frame)...")
     print("Press Ctrl+C to stop\n")
@@ -412,7 +413,6 @@ def _drive_animation(total_frames: int, frames_per_tick: int, frame_delay: float
         for frame in range(0, total_frames + 1):
             tick = frame // frames_per_tick
 
-            # Process extra signs delta-updates
             if extra_schedule and tick < len(extra_schedule):
                 entry = extra_schedule[tick]
                 for sign_id, (lines, colour) in entry.items():
@@ -421,66 +421,80 @@ def _drive_animation(total_frames: int, frames_per_tick: int, frame_delay: float
                         _update_sign_panel(sign_id, lines, colour)
                         last_pushed[sign_id] = key
 
-            # Advance Blender playhead frame
             send_to_blender(f"""
 import bpy
 bpy.context.scene.frame_set({frame})
 for area in bpy.context.screen.areas:
-    if area.type == 'VIEW_3D': 
-        area.tag_redraw()
+    if area.type == 'VIEW_3D': area.tag_redraw()
 """)
             if frame % frames_per_tick == 0:
                 print(f"  Frame {frame:4d} | Tick {tick:2d}")
-            
             time.sleep(frame_delay)
-
     except KeyboardInterrupt:
-        print("\nPlayback stopped by user.")
+        print("\nStopped by user")
 
 
-# ── Entry Point ───────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 
-def main(scenario: str = "default", frames_per_tick: int = 24, frame_delay: float = 0.08):
+def main(scenario: str = "default",
+         frames_per_tick: int = 24,
+         frame_delay: float = 0.08):
+
     print("=" * 60)
-    print(f"  DIGITAL TWIN EXECUTION — Scenario: {scenario}")
+    print(f"  FIX AND BAKE — {scenario}")
     print("=" * 60)
 
     print("\nChecking Blender connection...")
     if not test_connection():
-        print("FAILED — Open Blender, load IFC, start MCP server.")
+        print("FAILED — open Blender, load IFC, start MCP server")
         return
     print("OK")
 
-    sc              = SCENARIOS.get(scenario, SCENARIOS["default"])
-    baseline        = _is_baseline(sc)
-    has_wc          = sc.get("wheelchair", False)
-    n_tick          = sc["ticks"]
+    sc       = SCENARIOS.get(scenario, SCENARIOS["default"])
+    baseline = _is_baseline(sc)
+    n_tick   = sc["ticks"]
     total_occupants = 40 if baseline else 80
+
+    # Every non-baseline scenario tracks a mobility-constrained occupant.
+    # A scenario can name a specific room via "mobility_node"; otherwise
+    # it defaults to that scenario's own violation_room — no new hardcoded
+    # room names needed for TS-01/02/03.
+    #
+    # mobility_refuge is a SEPARATE flag from presence: only TS-04 sets it
+    # True. When False the marker still avoids stairs (a standing
+    # accessibility bias) but does not seek or settle at a refuge point,
+    # and the board never shows the escalation alert for it.
+    effective_mobility_node = None
+    mobility_refuge         = False
+    if not baseline:
+        effective_mobility_node = sc.get("mobility_node") or sc["violation_room"]
+        mobility_refuge         = sc.get("mobility_refuge", False)
+    has_wc = effective_mobility_node is not None
 
     print(f"\nScenario     : {scenario}")
     print(f"Description  : {sc['description']}")
     print(f"Ticks        : {n_tick}")
     if baseline:
-        print("Violation    : None (Baseline)")
+        print(f"Violation    : none (baseline)")
     else:
-        print(f"Violation    : Room {sc['violation_room']} at tick {sc['violation_tick']}")
+        print(f"Violation    : room {sc['violation_room']} at tick {sc['violation_tick']}")
         if sc.get("blocked_exits"):
             print(f"Blocked exits: {sc['blocked_exits']}")
         if sc.get("multi_violations"):
             for mv in sc["multi_violations"]:
                 print(f"Also violates: {mv['room']} at tick {mv['tick']}")
-        if sc.get("mobility_node"):
-            print(f"Mobility node: {sc['mobility_node']}")
+        print(f"Mobility node: {effective_mobility_node}"
+              f"{' (refuge-seeking)' if mobility_refuge else ''}")
     if sc.get("note"):
         print(f"Note         : {sc['note']}")
-    print(f"ADB ref      : {sc.get('adb_ref', '')}")
+    print(f"ADB ref      : {sc.get('adb_ref', '')} (shown on board, computed live)")
 
-    print("\nClearing conflicting materials and resetting viewport...")
+    print("\nClearing conflicting materials and setting viewport...")
     _cleanup_old_tags()
     _clear_materials_and_set_viewport()
     _reset_all_sign_panels_green()
 
-    print("\nBaking keyframes and initializing simulation telemetry...")
+    print(f"\nBaking keyframes (30-90s)...")
     result = bake_animation(
         total_occupants  = total_occupants,
         total_ticks      = n_tick,
@@ -490,7 +504,8 @@ def main(scenario: str = "default", frames_per_tick: int = 24, frame_delay: floa
         seed             = sc["seed"],
         blocked_exits    = sc.get("blocked_exits", []),
         multi_violations = sc.get("multi_violations", []),
-        mobility_node    = sc.get("mobility_node"),
+        mobility_node    = effective_mobility_node,
+        mobility_refuge  = mobility_refuge,
     )
 
     if result.get("status") != "ok":
@@ -505,23 +520,29 @@ def main(scenario: str = "default", frames_per_tick: int = 24, frame_delay: floa
     print(f"  Markers baked : {result.get('markers_baked', total_occupants)}")
     print(f"  Floors baked  : {result.get('floors_baked', 4)}")
     print(f"  Total frames  : 0 -> {total} ({n_tick} ticks)")
-    print("  Board + 4 primary corridor signs: Driven dynamically by baked telemetry")
+    print("  Board + 4 primary corridor signs: live from baked per-tick data")
     print("=" * 60)
 
-    # Highlight wheelchair cone if scenario contains mobility constraints
-    if not baseline and has_wc:
+    # Identify (not script) the wheelchair cone — present in every
+    # non-baseline scenario now
+    if has_wc:
         mobility_id = result.get("mobility_marker_id")
         if mobility_id is not None:
-            print(f"\nMarking wheelchair cone (Occupant_{mobility_id:03d})...")
+            print(f"\nIdentifying wheelchair cone (Occupant_{mobility_id:03d})...")
             _mark_wheelchair_user(mobility_id)
         else:
             print("\nWARNING: mobility_marker_id missing from bake result")
 
-    # Compute extra signs schedule for non-primary panels
+    # Extra signs — computed from a fresh, identical re-run of the same
+    # deterministic simulation (same seed, same effective_mobility_node,
+    # same mobility_refuge as the real bake, so the two runs match
+    # exactly), not written once and left static
     extra_schedule = []
     if not baseline and sc.get("extra_sign_kind"):
-        print(f"\nComputing extra sign schedule ({sc['extra_sign_kind']})...")
-        extra_schedule = _build_extra_sign_schedule(sc, total_occupants)
+        print(f"\nComputing reactive extra-sign schedule "
+              f"({sc['extra_sign_kind']})...")
+        extra_schedule = _build_extra_sign_schedule(
+            sc, total_occupants, effective_mobility_node, mobility_refuge)
 
     _jump_to_frame(0)
     _drive_animation(total, frames_per_tick, frame_delay, extra_schedule)
@@ -529,16 +550,20 @@ def main(scenario: str = "default", frames_per_tick: int = 24, frame_delay: floa
     print("\nAnimation complete.")
     if not baseline:
         v_frame = sc["violation_tick"] * frames_per_tick
-        print(f"Jump to violation frame using:")
+        print(f"Tip — jump to violation frame:")
         print(f"  python fix_and_bake.py --jump {v_frame}")
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Fire Safety Digital Twin Execution Orchestrator")
-    parser.add_argument("--scenario", default="default", choices=list(SCENARIOS.keys()), help="Scenario key to execute")
-    parser.add_argument("--fps", type=int, default=24, help="Frames per tick simulation rate")
-    parser.add_argument("--speed", type=float, default=0.08, help="Playback frame delay (seconds)")
-    parser.add_argument("--jump", type=int, default=None, help="Jump directly to a specific frame number")
+    parser = argparse.ArgumentParser(
+        description="Fix materials, bake animation, drive as a live twin")
+    parser.add_argument("--scenario", default="default",
+                        choices=list(SCENARIOS.keys()))
+    parser.add_argument("--fps",   type=int,   default=24)
+    parser.add_argument("--speed", type=float, default=0.08)
+    parser.add_argument("--jump",  type=int,   default=None)
     args = parser.parse_args()
 
     if args.jump is not None:
@@ -548,6 +573,6 @@ if __name__ == "__main__":
             _jump_to_frame(args.jump)
             print(f"At frame {args.jump}")
         else:
-            print("FAILED — Check Blender MCP connection.")
+            print("FAILED")
     else:
-        main(scenario=args.scenario, frames_per_tick=args.fps, frame_delay=args.speed)
+        main(args.scenario, args.fps, args.speed)

@@ -1,11 +1,6 @@
 # bim/manager_panel.py
 # Building manager overlay — ESCALATE triggers smooth pathfinding evacuation.
-#
-# Bug fix: paths JSON was embedded in an f-string which broke on curly braces.
-# Now paths are saved to a temp file and read by Blender — fully reliable.
-#
-# Movement: fixed-speed (0.35m/step) so cones visibly walk to assembly point.
-# Paths: room → corridor → exit → assembly point (3 waypoints, no BFS freeze).
+# Paths: room → corridor → exit → assembly point 
 
 import os, sys, json, random
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

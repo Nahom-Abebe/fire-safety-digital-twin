@@ -1,22 +1,25 @@
 # sensors/agent_walk.py
 # Per-agent random walk for baked animation — occupancy management model.
 #
-# Peter Lawrence's vision:
-#   - NO evacuation, NO fire alarm, NO biased walk to exits
-#   - Occupants move probabilistically between rooms at every tick
-#   - When a room exceeds ADB capacity its attractiveness drops so new
-#     occupants are discouraged from entering
-#   - Exit nodes are NEVER absorbing — occupants pass through like any
-#     other node and keep moving
-#   - The meaningful metric is "rooms brought back into compliance"
-#     not "occupants evacuated"
-#
 # Scenario support:
 #   - Single violation (TS-01, TS-04)          — violation_room + violation_tick
 #   - Multiple violations (TS-03)              — multi_violations list
 #   - Exit obstruction (TS-02)                 — blocked_exits list
 #   - Baseline no-violation (TS-05)            — violation_tick >= 999
-#   - Mobility constraint (TS-04)              — mobility_node label
+#   - Mobility-tracked occupant (all non-baseline scenarios) — mobility_node
+#
+# Mobility marker behaviour has two independent layers:
+#   1. Standing accessibility bias (always on for the tracked marker,
+#      every non-baseline scenario): stairs are avoided at all times.
+#   2. Refuge-seeking (only when mobility_refuge=True, i.e. TS-04): once
+#      the scenario's violation is active, the corridor node on the
+#      marker's current floor gets a large attractiveness boost — the
+#      same mechanism that redirects every other occupant away from an
+#      overcrowded room. Once the marker's position actually equals that
+#      refuge node, it settles there permanently for the rest of the
+#      simulation (a real decision to wait for staff rather than keep
+#      wandering) rather than continuing to be probabilistically nudged
+#      tick after tick, which previously let it drift away again.
 
 import random
 from sensors.building_graph import BUILDING_GRAPH, EXIT_IDS, get_max_occupancy
@@ -24,9 +27,10 @@ from sensors.building_graph import BUILDING_GRAPH, EXIT_IDS, get_max_occupancy
 G          = BUILDING_GRAPH
 ROOM_NODES = [n for n, d in G.nodes(data=True) if d["node_type"] == "room"]
 
-OVERCROWDED_ATTRACTIVENESS = 0.05   # strongly discourages new occupants
-NORMAL_ATTRACTIVENESS      = 1.0
-BLOCKED_EXIT_ATTRACTIVENESS = 0.01  # nearly zero — occupants avoid blocked exit
+OVERCROWDED_ATTRACTIVENESS  = 0.05   # discourages new occupants from a full room
+NORMAL_ATTRACTIVENESS       = 1.0
+BLOCKED_EXIT_ATTRACTIVENESS = 0.01   # occupants avoid a blocked exit / stairs
+REFUGE_ATTRACTIVENESS       = 6.0    # draws the mobility marker to its floor's corridor
 
 
 def _edge_weight(from_node: int, to_node: int,
@@ -54,6 +58,17 @@ def _choose_next(node: int, rng: random.Random,
     return rng.choices(candidates, weights=norm)[0]
 
 
+def _floor_corridor_nodes() -> dict:
+    """Maps floor name -> its corridor node id. Used as the refuge target
+    for the mobility-constrained occupant. Built from the graph itself —
+    no hardcoded node ids or coordinates."""
+    mapping = {}
+    for n, d in G.nodes(data=True):
+        if d.get("node_type") == "corridor" and d["floor"] not in mapping:
+            mapping[d["floor"]] = n
+    return mapping
+
+
 def simulate_agent_timeline(total_occupants: int = 80,
                              total_ticks: int = 25,
                              violation_tick: int = 5,
@@ -61,39 +76,21 @@ def simulate_agent_timeline(total_occupants: int = 80,
                              seed: int = 42,
                              multi_violations: list = None,
                              blocked_exits: list = None,
-                             mobility_node: str = None) -> list:
+                             mobility_node: str = None,
+                             mobility_refuge: bool = False) -> list:
     """
     Simulates per-agent movement for baked animation.
 
     Parameters
     ----------
-    total_occupants : int
-        Number of occupants to simulate.
-    total_ticks : int
-        Duration of simulation.
-    violation_tick : int
-        Tick at which the primary violation triggers.
-        Pass 999 for baseline (no violation).
-    violation_room : str | None
-        Graph label of primary violation room.
-        Pass None for baseline.
-    seed : int
-        Random seed for reproducible simulation.
-    multi_violations : list of dict | None
-        Additional violations beyond the primary one.
-        Format: [{"room": "3-14", "tick": 4}, ...]
-        Used by TS-03 to model multiple overcrowded rooms.
-    blocked_exits : list of str | None
-        Graph labels of exit nodes to block.
-        Format: ["EXIT-1"]
-        Used by TS-02 to model a physically blocked exit.
-        Blocked exits get near-zero attractiveness so occupants
-        naturally route toward alternative exits.
     mobility_node : str | None
         Graph label of the room containing the mobility-constrained
-        occupant (wheelchair user). Used by TS-04.
-        The first occupant placed in this room is tracked separately
-        so the baker can colour them distinctly.
+        occupant. Pass None only for a baseline run with no violation.
+    mobility_refuge : bool
+        When True, the marker seeks its floor's corridor node once the
+        violation is active and, on arrival, stays there for the rest
+        of the run. When False (default), the marker only carries the
+        standing stair-avoidance bias — no seeking, no settling.
 
     Returns
     -------
@@ -102,7 +99,8 @@ def simulate_agent_timeline(total_occupants: int = 80,
         "tick"              : int,
         "violation"         : dict | None,
         "agent_nodes"       : [node_id, ...],
-        "snapshot"          : dict,
+        "snapshot"          : dict,   # includes "mobility_status" when
+                                       # a mobility marker is tracked
         "mobility_marker_id": int | None,
     }]
     """
@@ -113,12 +111,10 @@ def simulate_agent_timeline(total_occupants: int = 80,
     violation   = None
     timeline    = []
 
-    # Attractiveness map — all rooms start at 1.0
     attractiveness_map = {n: NORMAL_ATTRACTIVENESS for n in G.nodes}
+    floor_corridor      = _floor_corridor_nodes()
 
-    # ── TS-02: Block specified exits immediately ───────────────────────────
-    # Blocked exits get near-zero attractiveness so the random walk
-    # naturally routes occupants toward alternative exits.
+    # ── Block specified exits immediately (TS-02) ──────────────────────────
     blocked_exit_nodes = []
     if blocked_exits:
         for exit_label in blocked_exits:
@@ -130,8 +126,8 @@ def simulate_agent_timeline(total_occupants: int = 80,
                 print(f"  EXIT BLOCKED: {exit_label} — "
                       f"attractiveness → {BLOCKED_EXIT_ATTRACTIVENESS}")
 
-    # ── TS-03: Pre-parse multi-violation schedule ─────────────────────────
-    multi_sched = {}   # tick → [node_id, ...]
+    # ── Pre-parse multi-violation schedule (TS-03) ─────────────────────────
+    multi_sched = {}
     if multi_violations:
         for mv in multi_violations:
             mv_label = mv.get("room")
@@ -141,27 +137,28 @@ def simulate_agent_timeline(total_occupants: int = 80,
             if mv_node is not None:
                 multi_sched.setdefault(mv_tick, []).append(mv_node)
 
-    # ── TS-04: Track mobility-constrained occupant ────────────────────────
-    # Find the first occupant already in the mobility_node room.
-    # If none starts there, assign one explicitly.
+    # ── Track mobility-constrained occupant ────────────────────────────────
     mobility_marker_id = None
     if mobility_node and not is_baseline:
         mob_node = next((n for n, d in G.nodes(data=True)
                          if d["label"] == mobility_node), None)
         if mob_node is not None:
-            # Find marker already in that room
             for i, n in enumerate(agent_nodes):
                 if n == mob_node:
                     mobility_marker_id = i
                     break
-            # If no one starts there, move the first occupant there
             if mobility_marker_id is None:
                 agent_nodes[0] = mob_node
                 mobility_marker_id = 0
             print(f"  MOBILITY CONSTRAINT: marker {mobility_marker_id} "
-                  f"in room {mobility_node}")
+                  f"starting in room {mobility_node}"
+                  f"{' (refuge-seeking enabled)' if mobility_refuge else ''}")
 
-    # ── Snapshot builder ──────────────────────────────────────────────────
+    # Sticky settle state — once True, the marker no longer moves for the
+    # remainder of the simulation. Only ever set when mobility_refuge=True.
+    mobility_settled = False
+
+    # ── Snapshot builder ────────────────────────────────────────────────────
 
     def build_snapshot(tick, violation_record):
         occ_count = {}
@@ -188,7 +185,6 @@ def simulate_agent_timeline(total_occupants: int = 80,
                     "severity": "OVER",
                 })
 
-        # Track primary violation room occupancy
         violation_node = (
             next((n for n, d in G.nodes(data=True)
                   if d["label"] == violation_room), None)
@@ -196,10 +192,22 @@ def simulate_agent_timeline(total_occupants: int = 80,
         )
         in_violation_rm = occ_count.get(violation_node, 0) if violation_node else 0
 
-        # Track blocked exit occupancy for TS-02
-        near_blocked_exit = 0
-        for bn in blocked_exit_nodes:
-            near_blocked_exit += occ_count.get(bn, 0)
+        near_blocked_exit = sum(occ_count.get(bn, 0) for bn in blocked_exit_nodes)
+
+        # Mobility status — real, computed from the marker's current node.
+        # at_refuge mirrors the sticky settle flag exactly, so it is only
+        # ever True once genuine, permanent arrival has happened (and only
+        # possible at all when mobility_refuge=True was passed in).
+        mobility_status = None
+        if mobility_marker_id is not None:
+            mnode  = agent_nodes[mobility_marker_id]
+            mlabel = G.nodes[mnode]["label"]
+            mfloor = G.nodes[mnode]["floor"]
+            mobility_status = {
+                "room"     : mlabel,
+                "floor"    : mfloor,
+                "at_refuge": mobility_settled,
+            }
 
         return {
             "tick"              : tick,
@@ -213,9 +221,10 @@ def simulate_agent_timeline(total_occupants: int = 80,
             "near_blocked_exit" : near_blocked_exit,
             "blocked_exits"     : [G.nodes[bn]["label"]
                                    for bn in blocked_exit_nodes],
+            "mobility_status"   : mobility_status,
         }
 
-    # ── Tick 0 — initial state ────────────────────────────────────────────
+    # ── Tick 0 ───────────────────────────────────────────────────────────────
     timeline.append({
         "tick"              : 0,
         "violation"         : None,
@@ -224,10 +233,9 @@ def simulate_agent_timeline(total_occupants: int = 80,
         "mobility_marker_id": mobility_marker_id,
     })
 
-    # ── Main simulation loop ──────────────────────────────────────────────
+    # ── Main loop ────────────────────────────────────────────────────────────
     for tick in range(1, total_ticks + 1):
 
-        # ── Primary violation trigger ──────────────────────────────────
         if not is_baseline and tick == violation_tick:
             vnode = next((n for n, d in G.nodes(data=True)
                           if d["label"] == violation_room), None)
@@ -244,7 +252,6 @@ def simulate_agent_timeline(total_occupants: int = 80,
                       f"{violation_room} — attractiveness → "
                       f"{OVERCROWDED_ATTRACTIVENESS}")
 
-        # ── Multi-violation triggers (TS-03) ───────────────────────────
         if tick in multi_sched:
             for mv_node in multi_sched[tick]:
                 mv_label = G.nodes[mv_node]["label"]
@@ -253,21 +260,45 @@ def simulate_agent_timeline(total_occupants: int = 80,
                       f"{mv_label} — attractiveness → "
                       f"{OVERCROWDED_ATTRACTIVENESS}")
 
-        # ── Move all occupants ─────────────────────────────────────────
+        violation_is_active = (not is_baseline) and (tick >= violation_tick)
+
         new_nodes = []
         for i, node in enumerate(agent_nodes):
-            # Mobility-constrained occupant (TS-04): moves toward corridor
-            # not stairwell — simulated by reducing stairwell attractiveness
             if i == mobility_marker_id and not is_baseline:
+
+                # Already settled at refuge — stay put for good. No rng
+                # draw, no further movement, regardless of what any other
+                # occupant does for the rest of the simulation.
+                if mobility_settled:
+                    new_nodes.append(node)
+                    continue
+
+                local_attract = dict(attractiveness_map)
+
+                # Standing accessibility bias — always avoid stairs
                 stair_nodes = [n for n, d in G.nodes(data=True)
                                if d["node_type"] == "stair"]
-                local_attract = dict(attractiveness_map)
                 for sn in stair_nodes:
                     local_attract[sn] = BLOCKED_EXIT_ATTRACTIVENESS
+
+                refuge_node = None
+                if mobility_refuge and violation_is_active:
+                    current_floor = G.nodes[node]["floor"]
+                    refuge_node   = floor_corridor.get(current_floor)
+                    if refuge_node is not None:
+                        local_attract[refuge_node] = REFUGE_ATTRACTIVENESS
+
                 next_node = _choose_next(node, rng, local_attract)
-            else:
-                next_node = _choose_next(node, rng, attractiveness_map)
-            new_nodes.append(next_node)
+
+                # Arrived at refuge this step — settle from here on
+                if (mobility_refuge and violation_is_active and
+                        refuge_node is not None and next_node == refuge_node):
+                    mobility_settled = True
+
+                new_nodes.append(next_node)
+                continue
+
+            new_nodes.append(_choose_next(node, rng, attractiveness_map))
 
         agent_nodes = new_nodes
 
@@ -289,66 +320,23 @@ if __name__ == "__main__":
     print("  AGENT WALK — Scenario Tests")
     print("=" * 60)
 
-    # TS-05: Baseline
-    print("\nTS-05: Baseline (violation_tick=999)")
+    print("\nTS-04-style: mobility marker in 3-10, violation at tick 2, refuge ON")
     tl = simulate_agent_timeline(
-        total_occupants=40, total_ticks=15,
-        violation_tick=999, violation_room=None, seed=5)
-    for r in tl:
-        snap = r["snapshot"]
-        print(f"  Tick {snap['tick']:2d} | alerts={len(snap['alerts']):2d} | "
-              f"violation={'YES' if r['violation'] else 'no'}")
-
-    # TS-01: Single violation
-    print("\nTS-01: Single violation room 0-4 at tick 4")
-    tl = simulate_agent_timeline(
-        total_occupants=80, total_ticks=20,
-        violation_tick=4, violation_room="0-4", seed=1)
-    vnode = next(n for n, d in G.nodes(data=True) if d["label"] == "0-4")
-    mx    = get_max_occupancy(vnode)
-    for r in tl:
-        snap = r["snapshot"]
-        cnt  = snap["in_violation_room"]
-        print(f"  Tick {snap['tick']:2d} | "
-              f"in 0-4={cnt:2d}/{mx} "
-              f"{'OVER' if cnt > mx else 'OK  '} | "
-              f"alerts={len(snap['alerts']):2d}")
-
-    # TS-02: Exit obstruction
-    print("\nTS-02: North exit blocked, violation room 0-9 at tick 5")
-    tl = simulate_agent_timeline(
-        total_occupants=80, total_ticks=20,
-        violation_tick=5, violation_room="0-9", seed=2,
-        blocked_exits=["EXIT-1"])
-    for r in tl:
-        snap = r["snapshot"]
-        print(f"  Tick {snap['tick']:2d} | "
-              f"near_blocked={snap['near_blocked_exit']} | "
-              f"alerts={len(snap['alerts']):2d}")
-
-    # TS-03: Multi-room violation
-    print("\nTS-03: Multi-room — 3-1 at tick 4, 3-14 at tick 4")
-    tl = simulate_agent_timeline(
-        total_occupants=80, total_ticks=25,
-        violation_tick=4, violation_room="3-1", seed=3,
-        multi_violations=[{"room": "3-14", "tick": 4}])
-    for r in tl:
-        snap = r["snapshot"]
-        over = [a["label"] for a in snap["alerts"] if a["severity"] == "OVER"]
-        print(f"  Tick {snap['tick']:2d} | over={over}")
-
-    # TS-04: Mobility constraint
-    print("\nTS-04: Wheelchair user in 3-10, violation at tick 2")
-    tl = simulate_agent_timeline(
-        total_occupants=80, total_ticks=25,
+        total_occupants=80, total_ticks=15,
         violation_tick=2, violation_room="3-10", seed=7,
-        mobility_node="3-10")
+        mobility_node="3-10", mobility_refuge=True)
     for r in tl:
-        snap = r["snapshot"]
-        mid  = r["mobility_marker_id"]
-        if mid is not None and tick < 5:
-            node = r["agent_nodes"][mid]
-            loc  = G.nodes[node]["label"]
-            print(f"  Tick {snap['tick']:2d} | "
-                  f"WC marker in {loc} | "
-                  f"alerts={len(snap['alerts'])}")
+        ms = r["snapshot"]["mobility_status"]
+        print(f"  Tick {r['tick']:2d} | room={ms['room']:6s} | "
+              f"at_refuge={ms['at_refuge']}")
+
+    print("\nTS-02-style: mobility marker present but refuge OFF (should just walk)")
+    tl2 = simulate_agent_timeline(
+        total_occupants=80, total_ticks=15,
+        violation_tick=5, violation_room="0-9", seed=2,
+        mobility_node="0-9", mobility_refuge=False,
+        blocked_exits=["EXIT-1"])
+    for r in tl2:
+        ms = r["snapshot"]["mobility_status"]
+        print(f"  Tick {r['tick']:2d} | room={ms['room']:6s} | "
+              f"at_refuge={ms['at_refuge']}")

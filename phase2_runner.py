@@ -5,7 +5,6 @@
 # - Sign updates feed back into movement probabilities next tick
 # - IFC Psets updated every tick (live Digital Twin)
 # - Bidirectional: AI decisions change occupant behaviour
-# Run from project root: python phase2_runner.py
 
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

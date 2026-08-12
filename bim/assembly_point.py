@@ -1,19 +1,5 @@
 # bim/assembly_point.py
 # Creates and manages the assembly point marker outside the building.
-# Provides two movement modes:
-#
-#   animate_evacuation_via_paths()
-#     — full pathfinding evacuation triggered by manager ESCALATE button
-#     — each cone follows room → corridor → stair → exit → assembly point
-#     — uses bpy.app.timers for smooth real-time movement (no keyframes)
-#
-#   redirect_cones_via_sign()
-#     — partial redirect triggered when agent updates a sign
-#     — only cones on the affected floor move toward nearest exit
-#     — simulates occupants reacting to corridor signage change
-#
-#   move_cones_to_assembly()
-#     — fire-and-forget instant move (legacy, kept for compatibility)
 
 import os, json, random
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE

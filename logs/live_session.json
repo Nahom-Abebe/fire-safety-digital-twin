@@ -9,31 +9,18 @@
     {
       "tick": 1,
       "total_occ": 80,
-      "warnings": 1,
+      "warnings": 0,
       "over": 0,
-      "alerts": [
-        {
-          "label": "0-13",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        }
-      ]
+      "alerts": []
     },
     {
       "tick": 2,
       "total_occ": 80,
       "warnings": 1,
-      "over": 1,
+      "over": 0,
       "alerts": [
         {
-          "label": "3-13",
-          "current": 5,
-          "max": 3,
-          "severity": "OVER"
-        },
-        {
-          "label": "3-18",
+          "label": "3-14",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
@@ -54,7 +41,7 @@
       "over": 0,
       "alerts": [
         {
-          "label": "3-19",
+          "label": "1-15",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
@@ -68,66 +55,28 @@
       "over": 0,
       "alerts": [
         {
-          "label": "3-1",
-          "current": 4,
-          "max": 4,
+          "label": "1-15",
+          "current": 3,
+          "max": 3,
           "severity": "WARNING"
         }
       ]
     },
     {
       "tick": 6,
-      "total_occ": 80,
-      "warnings": 3,
-      "over": 0,
-      "alerts": [
-        {
-          "label": "1-11",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        },
-        {
-          "label": "2-12",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        },
-        {
-          "label": "3-6",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        }
-      ]
-    },
-    {
-      "tick": 7,
       "total_occ": 80,
       "warnings": 0,
       "over": 0,
       "alerts": []
     },
     {
-      "tick": 8,
+      "tick": 7,
       "total_occ": 80,
-      "warnings": 3,
+      "warnings": 1,
       "over": 0,
       "alerts": [
         {
-          "label": "0-10",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        },
-        {
-          "label": "1-8",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        },
-        {
-          "label": "3-16",
+          "label": "1-2",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
@@ -135,90 +84,70 @@
       ]
     },
     {
+      "tick": 8,
+      "total_occ": 80,
+      "warnings": 0,
+      "over": 0,
+      "alerts": []
+    },
+    {
       "tick": 9,
       "total_occ": 80,
-      "warnings": 2,
-      "over": 0,
+      "warnings": 0,
+      "over": 1,
       "alerts": [
         {
-          "label": "2-9",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        },
-        {
-          "label": "3-14",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
+          "label": "1-1",
+          "current": 5,
+          "max": 4,
+          "severity": "OVER"
         }
       ]
     },
     {
       "tick": 10,
       "total_occ": 80,
-      "warnings": 2,
+      "warnings": 0,
       "over": 0,
-      "alerts": [
-        {
-          "label": "2-16",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        },
-        {
-          "label": "3-19",
-          "current": 3,
-          "max": 3,
-          "severity": "WARNING"
-        }
-      ]
+      "alerts": []
     }
   ],
   "agent_cycles": [
     {
-      "tick": 2,
-      "latency_seconds": 33.603,
-      "tool_count": 11,
-      "signs_updated": 1,
-      "adb_cited": true,
-      "directive": "## CYCLE COMPLETE\n\n**Summary:**\n\n- **Room 3-13 (5/3 occupants)**: GENUINE VIOLATION \u2014 Check_compliance returned FAIL. This bedroom exceeds the ADB Vol2 Clause 2.43 standard for care home bedrooms (max 1 single or double bed per room). \n  - Action: Floor 3 corridor sign now BLOCKED with message directing occupants to alternative bedrooms. Room attractiveness set to 0.0 to discourage further entry.\n\n- **Room 3-18 (3/3 occupants)**: FALSE POSITIVE \u2014 Although the graph flagged it as WARNING (at 100% ratio), check_compliance confirmed it is PASS (exactly at the allowed maximum). No action taken. This is a correct filtering result.\n\nNo building-wide response triggered. Only Floor 3 Room 3-13 directional sign updated. Escalation: No."
-    },
-    {
       "tick": 3,
-      "latency_seconds": 6.905,
+      "latency_seconds": 24.342,
       "tool_count": 2,
       "signs_updated": 0,
-      "adb_cited": true,
-      "directive": "**CYCLE COMPLETE - TICK 3**\n\nSENSE: Building state confirms 80 occupants distributed across 4 floors with no compliance alerts.\n\nREASON: No rooms flagged at WARNING (80%+) or OVER capacity. All occupancy levels are within ADB-permitted limits for this Purpose Group 2a residential care home.\n\nACT: No interventions required. System remains in monitoring mode. Board updated to reflect idle state.\n\nThe building is operating safely within UK Approved Document B Volume 2 Section 2.33 provisions for residential care homes."
+      "adb_cited": false,
+      "directive": "**CYCLE COMPLETE - Tick 3**\n\nAll rooms and floors are within ADB safe occupancy limits. No violations detected. System idle. No sign updates or attractiveness adjustments required."
     },
     {
       "tick": 6,
-      "latency_seconds": 18.688,
-      "tool_count": 9,
+      "latency_seconds": 5.507,
+      "tool_count": 2,
       "signs_updated": 0,
-      "adb_cited": true,
-      "directive": "**TICK 6 CYCLE COMPLETE**\n\n**Summary:**\nThe building simulation flagged 3 rooms at WARNING status (1-11, 2-12, 3-6), all at exactly 3/3 occupancy. However, compliance checking against the IFC model confirmed all three rooms are **PASS** \u2014 they are compliant with their designated capacities under ADB Vol2 Table B1 for Purpose Group 2a (Residential Care Home).\n\n**Key Finding:**\nThese are **FALSE POSITIVES**. The graph's max_occ thresholds differ from the IFC model's authoritative capacities. Rooms marked \"3/3\" on the graph are behaving within safe limits per the building information model.\n\n**Actions Taken:**\n- No signs updated\n- No attractiveness adjustments\n- No occupant redirection required\n\n**Current Building State:**\n- Total occupancy: 80/capacity\n- All three flagged rooms: compliant\n- No genuine violations detected\n- System operating normally"
+      "adb_cited": false,
+      "directive": "CYCLE COMPLETE:\n- Status: System Idle - all rooms within safe occupancy limits\n- No violations detected\n- No signage updates required\n- Building operating within ADB compliance for residential care home occupancy management\n- Ready to monitor next tick"
     },
     {
       "tick": 9,
-      "latency_seconds": 17.492,
-      "tool_count": 8,
-      "signs_updated": 0,
+      "latency_seconds": 18.841,
+      "tool_count": 9,
+      "signs_updated": 1,
       "adb_cited": true,
-      "directive": "**CYCLE COMPLETE - TICK 9**\n\n**Summary:**\n- **Total occupancy:** 80 occupants across 4 floors\n- **Graph alerts:** 2 WARNING rooms (2-9 and 3-14, both at 3/3)\n- **IFC compliance check:** Both rooms return PASS status\n- **Finding:** The graph-level capacity warnings are **false positives** against the authoritative IFC model\n\nThe simulation flagged rooms 2-9 and 3-14 at 100% of their graph-level limits, but the IFC model's capacity definition\u2014based on ADB Table B1 occupant load factors for Purpose Group 2a (residential care homes)\u2014confirms both rooms are within safe limits at 3 occupants. No corrective action required. No signs updated.\n\n**ADB Citation:** Table B1 \u2014 Purpose Group 2a residential care home occupancy standards"
+      "directive": "**CYCLE SUMMARY - TICK 9**\n\nCYCLE: Tick 9 - VIOLATION\nROOMS: 1-1 (5/3) FAIL\nADB: Section 2.43 - bedrooms should not contain more than one single or double bed\nSIGNS: SIGN_F1_CORRIDOR -> BLOCKED\nACTION: Updated corridor sign and set room attractiveness to 0.0 to prevent further occupancy\nESCALATE: No\n\n---\n\n**Status:**\n\u2713 Room 1-1 over-capacity violation confirmed and actioned\n\u2713 Sign redirects occupants to other floors\n\u2713 Room attractiveness set to minimum to discourage entry\n\u2713 ADB Clause 2.43 compliance enforced via occupancy controls"
     }
   ],
   "total_actions": 1,
   "rooms_managed": [
-    "3-13"
+    "1-1"
   ],
-  "start_time": "2026-08-10 19:35:10",
-  "end_time": "2026-08-10 19:36:58",
+  "start_time": "2026-08-12 18:43:55",
+  "end_time": "2026-08-12 18:45:12",
   "summary": {
-    "n_cycles": 4,
-    "mean_latency": 19.2,
+    "n_cycles": 3,
+    "mean_latency": 16.2,
     "total_actions": 1,
-    "adb_cited": "4/4"
+    "adb_cited": "1/3"
   }
 }

@@ -8,7 +8,6 @@
 #   - Physical corridor sign updates with clear occupant directions
 #   - Digital twin HUD board updates with ADB Cl.2.43 citations / escalation alerts
 #   - Occupants naturally disperse from overcrowded room
-#   - No evacuation, no fire alarm
 #
 # Run: python bake_animation.py
 # Run: python bake_animation.py --scenario TS-01

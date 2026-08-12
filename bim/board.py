@@ -1,7 +1,5 @@
 # bim/board.py
 # Building manager's dashboard text panel in Blender.
-# Keeps text short and within screen bounds — max 45 chars per line.
-# No "Evacuated" counter — this is an occupancy management system.
 
 from bim.ifc_bridge import send_to_blender
 
