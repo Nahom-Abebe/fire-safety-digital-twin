@@ -2,7 +2,51 @@
 # Clears conflicting materials, bakes occupancy management animation,
 # then drives it as a TRUE digital twin — every visible signal (board text,
 # the four primary corridor signs, and the scenario-specific extra signs)
-# is derived from the live per-tick simulation output.
+# is derived from the live per-tick simulation output, not from fixed
+# strings pinned to a chosen frame number.
+#
+# What changed vs the previous version:
+#   - REMOVED: board_initial / board_override hardcoded strings with
+#     fabricated occupancy numbers. The board is driven entirely by
+#     animation_baker's registered Blender frame handler, which reads
+#     the real per-tick snapshot baked from simulate_agent_timeline().
+#   - REMOVED: the manual "if frame >= v_frame: switch text" trigger loop.
+#     That logic told the twin what to show at a specific frame instead
+#     of letting it react to its own state.
+#   - REMOVED: _apply_ts04_refuge_freeze — a scripted freeze + forced
+#     scale-up of the wheelchair cone. Nothing in the simulation produces
+#     that behaviour; it was pure animation scripting, not a twin response.
+#   - REMOVED: manual updates to the four primary corridor signs
+#     (SIGN_F0_CORRIDOR_N / SIGN_F1_CORRIDOR / SIGN_F2_CORRIDOR /
+#     SIGN_F3_CORRIDOR). These are already fully reactive — animation_baker
+#     rewrites their colour and text every frame from real per-tick
+#     alerts. Touching them here caused a race: two separate processes
+#     writing the same Blender object on the same frame.
+#   - ADDED: extra signs (south exit / zone-clear / stairwell) are now
+#     computed by re-running simulate_agent_timeline() with the exact
+#     same parameters used for the bake (same seed => identical, verifiable
+#     result) and reading real per-tick alerts, not a string written once.
+#     Their colour and text can change tick to tick if the underlying
+#     occupancy changes — the twin reacts to itself, not to a script.
+#
+# Second pass fixes:
+#   - FIXED (root cause of "signs always show green"): animation_baker's
+#     live handler looked up Blender objects by the bare sign id
+#     ("SIGN_F0_CORRIDOR_N"), but the real objects are named
+#     SignPanel_<id> / SignText_<id>. The lookup silently returned None
+#     every frame, so nothing ever updated. Fixed in animation_baker.py;
+#     the handler also now writes panel colour, not just text — it
+#     previously never touched colour at all.
+#   - CHANGED: every non-baseline scenario now tracks a mobility-
+#     constrained occupant. mobility_node is no longer set per scenario —
+#     it defaults to that scenario's own violation_room unless a
+#     scenario explicitly overrides it, so TS-01/02/03 gained a wheelchair
+#     marker with zero new hardcoded room names.
+#   - ADDED (sensors/agent_walk.py): once a scenario's violation is
+#     active, the mobility marker is drawn toward and settles at the
+#     corridor node on its own current floor — a real "refuge" behaviour
+#     that emerges from the same attractiveness mechanism every other
+#     occupant is subject to, not a scripted freeze.
 
 import sys, os, time, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,9 +64,9 @@ from sensors.building_graph import BUILDING_GRAPH as G
 # computed from this configuration at run time.
 SCENARIOS = {
     "default": {
-        "description"     : "Ground floor bedroom 0-4 approaches capacity",
+        "description"     : "First floor bedroom 2-1 approaches capacity",
         "violation_tick"  : 5,
-        "violation_room"  : "0-4",
+        "violation_room"  : "2-1",
         "ticks"           : 25,
         "seed"            : 42,
         "adb_ref"         : "ADB Clause 2.43 — bedroom max occupancy",
@@ -33,9 +77,12 @@ SCENARIOS = {
     },
 
     "TS-01": {
-        "description"     : "Single room congestion — F0 bedroom 0-4, lounge 0-20 filtered as false positive",
+        "description"     : "Single room congestion — F1 bedroom 1-1 overcrowded",
         "violation_tick"  : 4,
-        "violation_room"  : "0-4",
+        # Was "0-4" — that graph node's real IFC space is the Lounge
+        # (max_occ 130), not a bedroom. diagnose_room_mapping.py
+        # confirmed 1-1 (IFC "113") is a genuine, floor-matched bedroom.
+        "violation_room"  : "1-1",
         "ticks"           : 20,
         "seed"            : 1,
         "adb_ref"         : "ADB Clause 2.43 — bedroom max occupancy care home",
@@ -43,40 +90,57 @@ SCENARIOS = {
         "multi_violations": [],
         "mobility_node"   : None,
         "extra_sign_kind" : None,
-        "note"            : "0-20 Lounge (15/130) stays PASS — board shows it live as a false positive",
+        # The earlier "0-20 Lounge (15/130) false positive" claim had no
+        # basis in the actual data — 0-20's real IFC space is a Corridor
+        # (max_occ 10), not a Lounge, and nothing in the codebase computes
+        # 130 for it. 0-20 was also never seeded with occupants in this
+        # bake, so that scenario state was never actually simulated.
+        # Removed until GRAPH_TO_IFC's room mapping is verified and the
+        # scenario can reference a room whose real identity is confirmed.
+        "note"            : None,
     },
 
     "TS-02": {
         "description"     : "Exit obstruction — north exit blocked, occupants route around it",
         "violation_tick"  : 5,
-        "violation_room"  : "0-9",
+        # Was "0-9" — that graph node's real IFC space is Dining
+        # (max_occ 15), not a bedroom. Repointed to a verified bedroom
+        # for consistency, though the visible sign behaviour is driven
+        # by blocked_exits regardless of which room is chosen here.
+        "violation_room"  : "1-2",
         "ticks"           : 20,
         "seed"            : 2,
         "adb_ref"         : "ADB Table 2.1 — max travel distance 18m escape route",
         "blocked_exits"   : ["EXIT-1"],
         "multi_violations": [],
         "mobility_node"   : None,
-        # South corridor sign is not one of the 4 primary FLOOR_SIGNS,
-        # so it is driven reactively by this file from real occupancy data.
-        "extra_sign_kind" : "opposite_exit",
-        "extra_sign_id"   : "SIGN_F0_CORRIDOR_S",
+        # SIGN_F0_CORRIDOR_S was removed from interior_signage.py — it
+        # was placed at a mismapped IFC space (a small side lobby, not
+        # a real second corridor) and rendered confusingly close to
+        # the north sign. The primary north sign's own redirect text
+        # ("North Corridor BLOCKED / Use South Exit") already conveys
+        # the reroute, so TS-02 no longer needs a second sign object.
+        "extra_sign_kind" : None,
         "note"            : "EXIT-1 blocked from tick 0 in the simulation — occupants genuinely avoid it",
     },
 
     "TS-03": {
-        "description"     : "Multi-room congestion — F3 rooms 3-1 and 3-14 simultaneously overcrowded",
+        "description"     : "Multi-room congestion — F3 rooms 3-1 and 3-2 simultaneously overcrowded",
         "violation_tick"  : 4,
         "violation_room"  : "3-1",
         "ticks"           : 25,
         "seed"            : 3,
         "adb_ref"         : "ADB Clause 2.43 — bedroom occupancy | Section 2.33 — care home",
         "blocked_exits"   : [],
-        "multi_violations": [{"room": "3-14", "tick": 4}],
+        # Was "3-14" — that graph node's real IFC space is a Bath
+        # (max_occ 1), not a bedroom. Repointed to 3-2, a verified
+        # floor-matched bedroom.
+        "multi_violations": [{"room": "3-2", "tick": 4}],
         "mobility_node"   : None,
         # Zone-clear signs on F0/F1/F2 report the REAL per-tick alert
         # state of each floor, not a fixed "all clear" string.
         "extra_sign_kind" : "zone_clear_other_floors",
-        "note"            : "Rooms 3-1 + 3-14 both overcrowded simultaneously — modelled in the walk itself",
+        "note"            : "Rooms 3-1 + 3-2 both overcrowded simultaneously — modelled in the walk itself",
     },
 
     "TS-04": {

@@ -5,6 +5,27 @@
 # - Sign updates feed back into movement probabilities next tick
 # - IFC Psets updated every tick (live Digital Twin)
 # - Bidirectional: AI decisions change occupant behaviour
+#
+# Fix applied — sign logic rewritten from room-level to floor-level:
+#
+#   The old version used a one-shot "handled_rooms" set: once a room
+#   triggered an alert, its sign got blocked and NEVER reverted, even
+#   after the room's occupancy genuinely cleared. By tick 25 of a real
+#   run, 45 of 80 rooms had permanently exhausted their one-shot
+#   trigger, and every floor's sign was stuck showing whichever room
+#   happened to be the LAST one processed in dict order — sometimes a
+#   trivial WARNING silently overwriting a more serious OVER alert
+#   from the same tick, sometimes a message from 20 ticks earlier for
+#   a room that had long since recovered.
+#
+#   Now: every tick, alerts are grouped by FLOOR. Each floor's sign
+#   shows its single MOST SEVERE currently-active alert (OVER beats
+#   WARNING, higher ratio breaks ties within the same severity) — not
+#   whichever room was processed last. A floor with zero active
+#   alerts gets its sign explicitly reset to ACTIVE/green. A sign is
+#   only re-written when its state actually changes tick to tick, to
+#   avoid a redundant Blender round trip every single tick regardless
+#   of whether anything changed.
 
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -33,16 +54,6 @@ FLOOR_SIGNS = {
     "F2 Second Floor": "SIGN_F2_CORRIDOR",
     "F3 Third Floor" : "SIGN_F3_CORRIDOR",
 }
-
-
-def _best_sign_for_room(room_label: str) -> str | None:
-    """Return the corridor sign for the floor the room is on."""
-    from sensors.building_graph import BUILDING_GRAPH as G
-    node = next((n for n, d in G.nodes(data=True)
-                 if d["label"] == room_label), None)
-    if node is None:
-        return None
-    return FLOOR_SIGNS.get(G.nodes[node]["floor"])
 
 
 def run():
@@ -81,78 +92,84 @@ def run():
 
     print(f"\nStarting {TOTAL_TICKS}-tick simulation ({TICK_INTERVAL}s/tick)...")
     print(f"Warning threshold : {int(WARN_RATIO*100)}% capacity")
-    print(f"ADB standard      : 1 person per 6m² (Purpose Group 2a, min 3)")
+    print(f"Capacity source   : real ADB-grounded max_occ per room "
+          f"(bim_query.SPACES), area/6m2 fallback only where no real data exists")
+    print(f"Alert scope       : bedrooms + communal rooms only — "
+          f"circulation, personal-care, and non-occupiable rooms excluded")
     print("-" * 60)
 
-    # Track which rooms have been actioned this session
-    handled_rooms  = set()
-    agent_message  = ""
-    action_count   = 0
+    # Current displayed state per sign, so we only write when it
+    # actually changes rather than every single tick regardless.
+    sign_state    = {sign_id: "ACTIVE" for sign_id in FLOOR_SIGNS.values()}
+    rooms_flagged = set()   # informational only — every room ever alerted
+    action_count  = 0       # counts actual sign STATE CHANGES, both ways
 
     for tick in range(1, TOTAL_TICKS + 1):
 
         # ── Advance probabilistic random walk ──────────────────────────
         move_occupants()
-        snapshot     = get_sensor_snapshot()
+        snapshot      = get_sensor_snapshot()
         agent_message = ""
 
-        # ── Pre-emptive compliance check (Peter's criterion 3) ─────────
+        # ── Group this tick's alerts by floor ───────────────────────────
+        floor_alerts = {}
         for alert in snapshot["alerts"]:
-            label    = alert["label"]
-            severity = alert["severity"]
-            ratio    = alert["ratio"]
-            current  = alert["current"]
-            max_occ  = alert["max"]
+            floor_alerts.setdefault(alert["floor"], []).append(alert)
 
-            # Skip rooms already actioned this session
-            if label in handled_rooms:
+        # ── Per-floor: show the worst active alert, or clear the sign ──
+        for floor_name, sign_id in FLOOR_SIGNS.items():
+            alerts_here = floor_alerts.get(floor_name)
+
+            if not alerts_here:
+                if sign_state[sign_id] != "ACTIVE":
+                    update_sign(
+                        sign_id,
+                        "All routes clear — occupancy within limits",
+                        "ACTIVE",
+                        adb_ref=""
+                    )
+                    sign_state[sign_id] = "ACTIVE"
+                    action_count += 1
+                    print(f"\n  🟢 TICK {tick:02d} — {floor_name} cleared "
+                          f"→ {sign_id} ACTIVE")
                 continue
 
-            sign_id = _best_sign_for_room(label)
+            # Worst alert on this floor: OVER beats WARNING, then
+            # higher ratio breaks ties within the same severity —
+            # not "whichever room happened to be processed last".
+            worst = max(
+                alerts_here,
+                key=lambda a: (1 if a["severity"] == "OVER" else 0, a["ratio"])
+            )
+            label, severity = worst["label"], worst["severity"]
+            current, max_occ, ratio = worst["current"], worst["max"], worst["ratio"]
+            rooms_flagged.add(label)
 
-            if severity == "WARNING":
-                # Pre-emptive: approaching capacity — redirect now
-                if sign_id:
-                    update_sign(
-                        sign_id,
-                        f"Room {label} approaching capacity "
-                        f"({int(ratio*100)}% of {max_occ}) "
-                        f"— please use alternative areas",
-                        "BLOCKED",
-                        adb_ref="ADB Vol2 Section 3 — occupancy load management"
-                    )
-                    action_count += 1
-                handled_rooms.add(label)
-                agent_message = (
-                    f"Pre-emptive action: {label} at {int(ratio*100)}%.\n"
-                    f"Sign {sign_id or 'N/A'} set to BLOCKED.\n"
-                    f"Ref: ADB Vol2 Section 3 — occupancy load management."
-                )
-                print(f"\n  ⚠  TICK {tick:02d} — WARNING: {label} "
-                      f"at {int(ratio*100)}% ({current}/{max_occ})"
-                      f"{' → ' + sign_id + ' BLOCKED' if sign_id else ''}")
+            if severity == "OVER":
+                message = (f"Room {label} OVER CAPACITY ({current}/{max_occ}) "
+                          f"— do not enter, use alternative route")
+                adb_ref = "ADB Vol2 Table B1 — Purpose Group 2a"
+                icon    = "🔴"
+            else:
+                message = (f"Room {label} approaching capacity "
+                          f"({int(ratio*100)}% of {max_occ}) "
+                          f"— please use alternative areas")
+                adb_ref = "ADB Vol2 Section 3 — occupancy load management"
+                icon    = "⚠ "
 
-            elif severity == "OVER":
-                # Overcapacity — sign update + alert
-                if sign_id:
-                    update_sign(
-                        sign_id,
-                        f"Room {label} OVER CAPACITY ({current}/{max_occ}) "
-                        f"— do not enter, use alternative route",
-                        "BLOCKED",
-                        adb_ref="ADB Vol2 Table B1 — Purpose Group 2a"
-                    )
-                    action_count += 1
-                handled_rooms.add(label)
-                agent_message = (
-                    f"OVERCAPACITY ALERT: {label} has {current} "
-                    f"occupants (max {max_occ} per ADB).\n"
-                    f"Sign {sign_id or 'N/A'} set to BLOCKED.\n"
-                    f"Ref: ADB Vol2 Table B1 — Purpose Group 2a."
-                )
-                print(f"\n  🔴 TICK {tick:02d} — OVERCAPACITY: {label} "
-                      f"({current}/{max_occ})"
-                      f"{' → ' + sign_id + ' BLOCKED' if sign_id else ''}")
+            new_state = f"{severity}:{label}"
+            if sign_state[sign_id] != new_state:
+                update_sign(sign_id, message, "BLOCKED", adb_ref=adb_ref)
+                sign_state[sign_id] = new_state
+                action_count += 1
+                print(f"\n  {icon} TICK {tick:02d} — {severity}: {label} "
+                      f"({current}/{max_occ}) → {sign_id} BLOCKED")
+
+            agent_message = (
+                f"{'OVERCAPACITY ALERT' if severity == 'OVER' else 'Pre-emptive action'}: "
+                f"{label} at {current}/{max_occ}.\n"
+                f"Sign {sign_id} set to BLOCKED.\nRef: {adb_ref}"
+            )
 
         # ── Update Blender visual layer ────────────────────────────────
         reposition_markers(snapshot)
@@ -168,7 +185,7 @@ def run():
               f"warnings={len(warns):2d} | "
               f"over={len(overs):2d} | "
               f"exits={snapshot['at_exits']:2d} | "
-              f"managed={len(handled_rooms)}")
+              f"flagged={len(rooms_flagged)}")
 
         time.sleep(TICK_INTERVAL)
 
@@ -179,12 +196,13 @@ def run():
     final = get_sensor_snapshot()
     print(f"  Final occupancy  : {final['total_occ']}")
     print(f"  At exits         : {final['at_exits']}")
-    print(f"  Rooms managed    : {len(handled_rooms)}")
-    print(f"  Sign actions     : {action_count}")
+    print(f"  Rooms flagged    : {len(rooms_flagged)} (ever alerted, across the whole run)")
+    print(f"  Sign state changes: {action_count} (blocks + clears combined)")
     print()
     print("  (1) Digital twin state — Pset_FireSafetyStatus updated every tick ✅")
-    print("  (2) Safety maintained  — sign updates redirect from over-capacity rooms ✅")
-    print(f"  (3) Pre-emptive       — {action_count} interventions before hard violations ✅")
+    print("  (2) Safety maintained  — sign updates redirect from over-capacity rooms,")
+    print("                           and clear once the floor genuinely recovers ✅")
+    print(f"  (3) Pre-emptive        — reacted to {len(rooms_flagged)} rooms across the run ✅")
     print("=" * 60)
 
 

@@ -1,6 +1,6 @@
 # bim/ifc_bridge.py
 # Blender socket connection + Pset get/set via GlobalId
-# Protocol: plain UTF-8 JSON over TCP (proven working)
+# Protocol: plain UTF-8 JSON over TCP
 # Result channel: file-based (Blender writes JSON, Python reads it)
 
 import socket, json, os, time
@@ -61,22 +61,26 @@ def _read_result(timeout=8.0) -> dict:
 def get_ifc_pset_properties(global_id: str, pset_name: str) -> dict:
     if os.path.exists(RESULT_FILE): os.remove(RESULT_FILE)
     code = f"""
-import json
-from bonsai.bim.ifc import IfcStore
-model  = IfcStore.get_file()
-result = {{"global_id":"{global_id}","pset_name":"{pset_name}","properties":{{}},"found":False}}
-if model:
-    element = model.by_guid("{global_id}")
-    if element:
-        for rel in model.by_type("IfcRelDefinesByProperties"):
-            if element not in rel.RelatedObjects: continue
-            pset = rel.RelatingPropertyDefinition
-            if hasattr(pset,"Name") and pset.Name == "{pset_name}":
-                result["found"] = True
-                for p in pset.HasProperties:
-                    try: result["properties"][p.Name] = p.NominalValue.wrappedValue
-                    except: result["properties"][p.Name] = None
-                break
+import json, traceback
+try:
+    from bonsai.bim.ifc import IfcStore
+    model  = IfcStore.get_file()
+    result = {{"global_id":"{global_id}","pset_name":"{pset_name}","properties":{{}},"found":False}}
+    if model:
+        element = model.by_guid("{global_id}")
+        if element:
+            for rel in model.by_type("IfcRelDefinesByProperties"):
+                if element not in rel.RelatedObjects: continue
+                pset = rel.RelatingPropertyDefinition
+                if hasattr(pset,"Name") and pset.Name == "{pset_name}":
+                    result["found"] = True
+                    for p in pset.HasProperties:
+                        try: result["properties"][p.Name] = p.NominalValue.wrappedValue
+                        except: result["properties"][p.Name] = None
+                    break
+except Exception as e:
+    result = {{"error": str(e), "trace": traceback.format_exc(),
+               "global_id":"{global_id}","pset_name":"{pset_name}"}}
 with open(r"{RESULT_FILE}","w",encoding="utf-8") as f:
     json.dump(result,f)
 print("pset read done")
@@ -87,25 +91,71 @@ print("pset read done")
 
 
 def update_ifc_pset_properties(global_id: str, pset_name: str, props: dict) -> dict:
+    """
+    Writes properties into an IFC Pset on the given element, creating
+    the Pset if it doesn't already exist. Returns an honest report of
+    what actually happened — element_found, pset_created (vs edited),
+    and the properties that were written — read back from a result
+    file the Blender-side script writes itself, wrapped in try/except
+    so any failure (bad GlobalId, missing model, an ifcopenshell
+    error) is reported rather than swallowed.
+    """
     props_literal = repr(props)
+    if os.path.exists(RESULT_FILE): os.remove(RESULT_FILE)
+
     code = f"""
-import ifcopenshell, ifcopenshell.api
-from bonsai.bim.ifc import IfcStore
-model = IfcStore.get_file()
-if model:
-    element = model.by_guid("{global_id}")
-    if element:
-        target = None
-        for rel in model.by_type("IfcRelDefinesByProperties"):
-            if element in rel.RelatedObjects:
-                p = rel.RelatingPropertyDefinition
-                if hasattr(p,"Name") and p.Name == "{pset_name}":
-                    target = p; break
-        if target is None:
-            target = ifcopenshell.api.run("pset.add_pset",model,
-                product=element,name="{pset_name}")
-        ifcopenshell.api.run("pset.edit_pset",model,
-            pset=target,properties={props_literal})
-        print(f"Updated {pset_name} on {global_id}")
+import json, traceback
+try:
+    import ifcopenshell, ifcopenshell.api
+    from bonsai.bim.ifc import IfcStore
+    model  = IfcStore.get_file()
+    result = {{"global_id":"{global_id}","pset_name":"{pset_name}",
+               "element_found": False, "pset_created": False,
+               "properties_written": {{}}}}
+
+    if model is None:
+        result["status"] = "error"
+        result["message"] = "IfcStore.get_file() returned None — no IFC model loaded"
+    else:
+        element = model.by_guid("{global_id}")
+        if element is None:
+            result["status"] = "error"
+            result["message"] = "No element found for GlobalId {global_id}"
+        else:
+            result["element_found"] = True
+            target = None
+            for rel in model.by_type("IfcRelDefinesByProperties"):
+                if element in rel.RelatedObjects:
+                    p = rel.RelatingPropertyDefinition
+                    if hasattr(p,"Name") and p.Name == "{pset_name}":
+                        target = p
+                        break
+            if target is None:
+                target = ifcopenshell.api.run("pset.add_pset", model,
+                    product=element, name="{pset_name}")
+                result["pset_created"] = True
+
+            ifcopenshell.api.run("pset.edit_pset", model,
+                pset=target, properties={props_literal})
+
+            # Read the properties straight back from the pset object we
+            # just edited, in the same script run, as direct confirmation
+            # the write landed — not a separate best-effort re-read.
+            written = {{}}
+            for p in target.HasProperties:
+                try: written[p.Name] = p.NominalValue.wrappedValue
+                except: written[p.Name] = None
+            result["properties_written"] = written
+            result["status"] = "ok"
+except Exception as e:
+    result = {{"status": "error", "message": str(e),
+               "trace": traceback.format_exc(),
+               "global_id":"{global_id}","pset_name":"{pset_name}"}}
+
+with open(r"{RESULT_FILE}","w",encoding="utf-8") as f:
+    json.dump(result,f)
+print(f"Pset write: {{result.get('status')}}")
 """
-    return send_to_blender(code)
+    r = send_to_blender(code)
+    if "error" in r: return r
+    return _read_result()

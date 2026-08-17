@@ -2,8 +2,50 @@
 # Building topology derived from BuildingGraphHosp.html (Peter Lawrence)
 # Nodes: rooms, corridors, stairs, exits, assembly
 # Edges: doors (weight=1), stairs (weight=20), outdoor (weight=10)
+#
+# Fix applied — get_max_occupancy():
+#   Previously computed capacity purely from area_m2 using a flat
+#   6 m2/person density applied to every room type uniformly. A
+#   diagnostic cross-check against the real IFC data (bim_query.SPACES,
+#   via room_geometry.GRAPH_TO_IFC) showed this was wrong for nearly
+#   every room except bedrooms, which happened to coincidentally land
+#   close to the real number: the real Lounge is max_occ=130, the
+#   formula gave 7; Dining is really 15, the formula gave 3; a Store
+#   room is really 0 (non-occupiable), the formula gave 3. Every
+#   scenario's over-capacity alerts were being computed against these
+#   wrong numbers.
+#
+#   Now uses the REAL max_occ from bim_query.SPACES for every "room"
+#   node (all 80 are covered by GRAPH_TO_IFC), falling back to the old
+#   area-based formula only for node types GRAPH_TO_IFC doesn't cover
+#   at all (stairs, exits, lobbies, assembly). A floor of
+#   max(1, real_max_occ) is applied rather than using a real 0
+#   literally — six F0 service rooms (W/C, three Store rooms, Storage)
+#   are marked non-occupiable with a real max_occ of 0, and using that
+#   literally would make any single incidental random-walk visit to
+#   one of them an automatic, permanent alert unrelated to any
+#   scenario's actual narrative. A floor of 1 keeps them correctly
+#   very-low-capacity without that noise. The more rigorous fix would
+#   be excluding non_occupiable rooms from alert generation entirely
+#   in sensors/agent_walk.py — not implemented here.
+#
+#   This makes get_max_occupancy() only work correctly if
+#   global_ids_v2.json (loaded by bim.bim_query) is present and valid —
+#   a new dependency this module didn't have before. It also now
+#   imports from bim/, which it previously never did.
+#
+#   Known unresolved: three graph nodes (0-13, 0-15, 0-16) map via
+#   GRAPH_TO_IFC to real IFC spaces on the WRONG floor (F1/F3/F2
+#   respectively, despite being labelled F0 rooms here) — see
+#   diagnose_room_mapping.py. Their real max_occ is still used (all
+#   three are non-occupiable Store rooms, so floor=1 applies), but
+#   their extracted GEOMETRY (via room_geometry.py) is still wrong —
+#   unrelated to this fix, unresolved, flagged for anyone placing a
+#   marker or sign near those specific nodes.
 
 import networkx as nx
+from bim.room_geometry import GRAPH_TO_IFC
+from bim.bim_query import SPACES
 
 # ── Node definitions ──────────────────────────────────────────────────────────
 # (id, label, floor, type, area_m2)
@@ -187,15 +229,110 @@ def build_graph() -> nx.Graph:
 
 BUILDING_GRAPH = build_graph()
 
+# Graph label -> real IFC space dict, for get_max_occupancy(). Built once
+# at import time from GRAPH_TO_IFC (room_geometry.py) and SPACES
+# (bim_query.py) rather than looked up fresh on every call.
+_IFC_NAME_TO_SPACE = {s.get("name"): s for s in SPACES.values()}
+_LABEL_TO_REAL_SPACE = {
+    label: _IFC_NAME_TO_SPACE[ifc_name]
+    for label, ifc_name in GRAPH_TO_IFC.items()
+    if ifc_name in _IFC_NAME_TO_SPACE
+}
+
 
 def get_max_occupancy(node_id: int) -> int:
+    """
+    Real ADB-grounded capacity from bim_query.SPACES when available
+    (every "room" node is covered by GRAPH_TO_IFC), falling back to
+    the area-based formula for anything GRAPH_TO_IFC doesn't map
+    (stairs, exits, lobbies, assembly). A floor of max(1, real_max_occ)
+    is applied — see module docstring for why a literal 0 isn't used.
+    """
+    label = BUILDING_GRAPH.nodes[node_id].get("label")
+    real  = _LABEL_TO_REAL_SPACE.get(label)
+    if real is not None and "max_occ" in real:
+        return max(1, int(real["max_occ"]))
+
     area = BUILDING_GRAPH.nodes[node_id].get("area_m2", 0)
     return max(3, int(area / ADB_M2_PER_PERSON))
+
+
+def is_non_occupiable(node_id: int) -> bool:
+    """
+    True if the node's real IFC space is explicitly marked
+    non_occupiable in bim_query.SPACES (Store, W/C, Storage, etc).
+
+    get_max_occupancy() floors these at max(1, ...) so a single visit
+    doesn't divide-by-zero or nonsense-compare — but flooring at 1
+    still means one incidental occupant registers as a real ADB
+    occupancy violation. Used as one input to
+    is_occupancy_alert_relevant() below — kept as its own function
+    since it's a direct, unambiguous read of one real data field, not
+    a judgement call the way excluding Bath/circulation rooms is.
+    """
+    label = BUILDING_GRAPH.nodes[node_id].get("label")
+    real  = _LABEL_TO_REAL_SPACE.get(label)
+    return bool(real and real.get("non_occupiable", False))
+
+
+# Real long_name values (case-insensitive) treated as single-occupant
+# personal-care rooms, not a fire-safety occupancy-management concern
+# the way a crowded bedroom or communal lounge is. Not covered by
+# non_occupiable — these are genuinely marked occupiable in the real
+# data, just not what this system's auto-alerting exists to catch.
+_PERSONAL_CARE_ROOM_TYPES = {"bath", "women"}
+
+
+def is_occupancy_alert_relevant(node_id: int) -> bool:
+    """
+    True if this node's real IFC space is a genuine bedroom or
+    communal room that the occupancy-management system should
+    automatically alert on. Excludes three categories:
+
+      1. non_occupiable rooms (Store, W/C, Storage) — is_non_occupiable()
+      2. circulation spaces (Corridor, Stair, Lobby, Lift) — real
+         zone == "CIRCULATION"
+      3. single-occupant personal-care rooms (Bath, Women) — real
+         max_occ=1, genuinely occupiable but not what this system
+         exists to manage
+
+    Bedroom, Lounge, Office, Open Office, Kitchen, Dining, Daycare,
+    Conference, and anything else not matching the above stays
+    included. A node with no real data at all (not in GRAPH_TO_IFC —
+    stairs, exits, assembly) returns True rather than being silently
+    excluded, so alerting on those falls through to the pre-existing
+    area-based behaviour rather than a judgement call this function
+    has no data to make.
+
+    get_room_status() (a direct, specific lookup) is unaffected by
+    this — it always reports a room's real occupancy/capacity ratio
+    on request. This only controls what the automatic sweep in
+    sensor_sim.py's get_sensor_snapshot() surfaces on its own.
+    """
+    label = BUILDING_GRAPH.nodes[node_id].get("label")
+    real  = _LABEL_TO_REAL_SPACE.get(label)
+    if real is None:
+        return True
+
+    if real.get("non_occupiable", False):
+        return False
+    if real.get("zone", "") == "CIRCULATION":
+        return False
+    if real.get("long_name", "").lower() in _PERSONAL_CARE_ROOM_TYPES:
+        return False
+    return True
 
 
 def get_exit_path(node_id: int) -> dict:
     """
     Finds the shortest path from the given node to the Assembly Point (999).
+
+    Returns path_nodes (real graph node ids) alongside path_labels
+    (display strings). sensor_sim.py's evacuation-mode movement was
+    reading a "path" key that never existed here — only path_labels —
+    so .get("path", []) silently returned an empty list every tick and
+    no occupant ever actually moved during evacuation mode. path_nodes
+    is the fix; path_labels stays unchanged for existing callers.
     """
     try:
         path = nx.shortest_path(BUILDING_GRAPH, node_id, ASSEMBLY_ID, weight="weight")
@@ -206,6 +343,7 @@ def get_exit_path(node_id: int) -> dict:
     return {
         "from_label" : BUILDING_GRAPH.nodes[node_id]["label"],
         "exit_node"  : ASSEMBLY_ID,
+        "path_nodes" : path,
         "path_labels": [BUILDING_GRAPH.nodes[n]["label"] for n in path],
         "path_weight": length,
     }
@@ -215,7 +353,7 @@ if __name__ == "__main__":
     G = BUILDING_GRAPH
     rooms = [n for n,d in G.nodes(data=True) if d["node_type"]=="room"]
     exits = [n for n,d in G.nodes(data=True) if d["node_type"]=="exit"]
-    print(f"✅ Graph built")
+    print(f"Graph built")
     print(f"   Nodes : {G.number_of_nodes()}")
     print(f"   Edges : {G.number_of_edges()}")
     print(f"   Rooms : {len(rooms)}")

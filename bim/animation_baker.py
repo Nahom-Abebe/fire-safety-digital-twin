@@ -4,7 +4,6 @@
 import json, os, random
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
 from bim.room_geometry import load_room_centroids
-from bim.signage import update_sign
 from sensors.agent_walk import simulate_agent_timeline
 from sensors.building_graph import BUILDING_GRAPH, get_max_occupancy
 
@@ -385,22 +384,6 @@ def _write_compliance_pset(violation_room: str):
         return {"error": str(e)}
 
 
-def _update_signs_for_violation(violation_room: str, violation_floor: str):
-    """
-    Updates corridor sign — simple occupant text only, no ADB on signs.
-    ADB citations go on the board and in logs.
-    """
-    sign_id = FLOOR_SIGNS.get(violation_floor)
-    if not sign_id:
-        return
-    update_sign(
-        sign_id,
-        f"Room {violation_room} is full — please use alternative areas",
-        "ALTERNATE",
-        "ADB Vol2 Clause 2.43 — residential care home bedroom occupancy"
-    )
-
-
 # ── Main bake function ────────────────────────────────────────────────────────
 
 def bake_animation(total_occupants: int = 80,
@@ -537,6 +520,20 @@ def bake_animation(total_occupants: int = 80,
         mobility_refuge = mobility_refuge if not is_baseline else False)
 
     # ── IFC Pset + sign updates — baseline guard ──────────────────────────
+    # _update_signs_for_violation() (via bim/signage.py) is deliberately
+    # NOT called here. It writes directly to the same SignPanel_/SignText_
+    # Blender objects the live sign_states handler above controls every
+    # frame — a one-time write that gets overwritten within moments by
+    # the handler's own tick-0 (green) state, and along the way briefly
+    # sets the wrong colour (it hardcodes "ALTERNATE"/amber, while the
+    # live handler correctly computes red for a violation floor). It also
+    # tries to feed back into sensors/sensor_sim.py, a module unrelated
+    # to sensors/agent_walk.py — the one actually driving this bake — so
+    # that call silently does nothing here. bim/signage.py itself is left
+    # untouched; it's the correct integration for the live agent pathway
+    # (real-time IFC write + live sim feedback + panel update, no
+    # competing handler to race against), just not needed for a baked
+    # demo scenario where the live handler already covers everything.
     if is_baseline:
         print("  Baseline scenario — IFC Pset write suppressed")
         print("  Corridor sign updates suppressed")
@@ -544,9 +541,6 @@ def bake_animation(total_occupants: int = 80,
         print(f"  Writing ComplianceStatus=FAIL to IFC for {violation_room}...")
         pset_result = _write_compliance_pset(violation_room)
         print(f"  Pset result: {pset_result.get('status', pset_result)}")
-        if violation_floor:
-            print(f"  Updating corridor sign for {violation_floor}...")
-            _update_signs_for_violation(violation_room, violation_floor)
 
     total_frames = total_ticks * frames_per_tick
 

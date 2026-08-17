@@ -7,6 +7,19 @@
 #   live_reposition_markers() — fire-and-forget, no result file (live agent runner)
 #                               safe to call every tick without competing with
 #                               floor colour or Pset update calls
+#
+# Fix applied:
+#   create_markers() previously only removed objects named "Occupant_*"
+#   before recreating them. It never touched "WheelchairLabel" — a text
+#   object fix_and_bake.py's TS-04 run parents to a specific occupant
+#   cone. Since create_markers() deletes and recreates cones with the
+#   same names (new objects, not the same ones), any WheelchairLabel
+#   left over from an earlier TS-04 bake loses its parent and is left
+#   floating at whatever world position its old local offset resolves
+#   to — outside the building, detached from any cone. fix_and_bake.py
+#   already cleans this object up before its own runs; create_markers()
+#   is the actual "fresh start" point for the whole scene, so it now
+#   owns the same cleanup.
 
 import json, os, random
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -52,6 +65,21 @@ def _cone(name, r1, r2, depth):
         bsdf.inputs['Emission Strength'].default_value = 1.5
     mesh.materials.append(mat)
     return bpy.data.objects.new(name, mesh)
+
+def _cleanup_stray_wheelchair_labels():
+    # Any WheelchairLabel left over from an earlier fix_and_bake.py
+    # TS-04 run is parented to a cone that create_markers() is about
+    # to delete and replace. Remove it here so it doesn't end up
+    # orphaned and floating at a stale world position.
+    removed = 0
+    for o in list(bpy.data.objects):
+        if 'WheelchairLabel' in o.name:
+            bpy.data.objects.remove(o, do_unlink=True)
+            removed += 1
+    for mat in list(bpy.data.materials):
+        if mat.name in ('WheelchairMat', 'WCLabelMat'):
+            bpy.data.materials.remove(mat)
+    return removed
 """
 
 
@@ -67,8 +95,19 @@ def _jitter(centroid, seed):
 def create_markers(snapshot: dict) -> dict:
     """
     Creates one cone marker per occupant at their starting positions.
-    Deletes any existing markers first. Uses result file round-trip.
-    Call once at initialisation — not every tick.
+    Deletes any existing markers first, along with any stray
+    WheelchairLabel left over from a previous fix_and_bake.py TS-04
+    run — this is the "fresh start" point for the scene, so nothing
+    from a prior scenario should survive into it.
+
+    Marker 0 (the first occupant placed) is coloured purple with a
+    "WC User" label parented to it, matching the same convention
+    fix_and_bake.py's TS-04 uses — so the wheelchair-marking approach
+    is visible from the very first setup, not only during that
+    scenario. Returns 'wheelchair_marker_id' in the result dict.
+
+    Uses result file round-trip. Call once at initialisation — not
+    every tick.
     """
     centroids = load_room_centroids()
     occupancy = snapshot.get("occupancy", {})
@@ -88,15 +127,28 @@ def create_markers(snapshot: dict) -> dict:
     if os.path.exists(RESULT_FILE):
         os.remove(RESULT_FILE)
 
+    # Marker 0 (the first occupant placed) is the baseline wheelchair
+    # marker for Phase 1's static snapshot. Phase 1 has no scenario or
+    # violation context, so there's no "correct" room to place them in —
+    # this is purely to show the marking convention (purple cone + a
+    # label that stays attached as the cone moves) before any scenario
+    # runs. fix_and_bake.py's TS-04 chooses its own marker based on the
+    # actual violation room and is unaffected by this.
+    WHEELCHAIR_MARKER_ID = 0
+
     code = _HELPERS + f"""
 import json, traceback
 try:
     pl = json.loads('{pj}')
     col = _col()
+
+    labels_removed = _cleanup_stray_wheelchair_labels()
+
     for o in list(bpy.data.objects):
         if o.name.startswith('Occupant_'):
             bpy.data.objects.remove(o, do_unlink=True)
     created = 0
+    wc_cone = None
     for mid, x, y, z, r, g, b, a in pl:
         obj = _cone(f'Occupant_{{mid:03d}}', 0.25, 0.05, 1.7)
         col.objects.link(obj)
@@ -118,9 +170,59 @@ try:
                 bsdf.inputs['Emission Color'].default_value  = safety_orange
                 bsdf.inputs['Emission Strength'].default_value = 5.0  # Extra bright pop
         # ──────────────────────────────────────────────────────────────────
-                
+
+        if mid == {WHEELCHAIR_MARKER_ID}:
+            wc_cone = obj
+
         created += 1
-    report = {{'status': 'ok', 'created': created}}
+
+    # ── Baseline wheelchair marker: purple cone + label parented to it ──
+    # Same technique as fix_and_bake.py's TS-04 marking: text created via
+    # bpy.data (not bpy.ops, which needs a viewport context this script
+    # doesn't have), positioned in the cone's LOCAL space, then parented
+    # so it moves with the cone rather than floating at a fixed world
+    # position (that was the earlier orphaned-label bug).
+    if wc_cone is not None:
+        PURPLE = (0.55, 0.05, 0.80, 1.0)
+        wc_mat = bpy.data.materials.new('WheelchairMat')
+        wc_mat.use_nodes = True
+        bsdf = wc_mat.node_tree.nodes.get('Principled BSDF')
+        if bsdf:
+            bsdf.inputs['Base Color'].default_value = PURPLE
+            if 'Emission Color' in bsdf.inputs:
+                bsdf.inputs['Emission Color'].default_value = PURPLE
+            if 'Emission Strength' in bsdf.inputs:
+                bsdf.inputs['Emission Strength'].default_value = 3.0
+        wc_cone.data.materials.clear()
+        wc_cone.data.materials.append(wc_mat)
+        wc_cone.color = PURPLE
+
+        txt_data         = bpy.data.curves.new('WheelchairLabel', type='FONT')
+        txt_data.body    = 'WC User'
+        txt_data.size    = 0.40
+        txt_data.align_x = 'CENTER'
+        tmat = bpy.data.materials.new('WCLabelMat')
+        tmat.use_nodes = True
+        tn = tmat.node_tree.nodes.get('Principled BSDF')
+        if tn:
+            tn.inputs['Base Color'].default_value = (1.0, 1.0, 1.0, 1.0)
+            if 'Emission Color' in tn.inputs:
+                tn.inputs['Emission Color'].default_value = (1.0, 1.0, 1.0, 1.0)
+            if 'Emission Strength' in tn.inputs:
+                tn.inputs['Emission Strength'].default_value = 4.0
+        txt_data.materials.clear()
+        txt_data.materials.append(tmat)
+
+        txt_obj = bpy.data.objects.new('WheelchairLabel', txt_data)
+        bpy.context.scene.collection.objects.link(txt_obj)
+        txt_obj.location       = (0.0, 0.0, 2.5)
+        txt_obj.rotation_euler = (1.5708, 0, 0)
+        txt_obj.parent         = wc_cone
+        txt_obj.parent_type    = 'OBJECT'
+
+    report = {{'status': 'ok', 'created': created,
+               'stray_labels_removed': labels_removed,
+               'wheelchair_marker_id': {WHEELCHAIR_MARKER_ID} if wc_cone else None}}
 except Exception as e:
     report = {{'status': 'error', 'message': str(e), 'trace': traceback.format_exc()}}
 with open(r"{RESULT_FILE}", "w", encoding="utf-8") as f:

@@ -1,6 +1,7 @@
 # bim/pset_sync.py
 # Writes live occupancy data to Pset_FireSafetyStatus for every
 # occupied room in a single batched Blender round trip.
+# Also writes FireAlarmStatus=True to the fire zone space (Peter's pattern).
 
 import json, os
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -18,9 +19,23 @@ LABEL_TO_GID = {
 
 def bulk_update_occupancy_psets(snapshot: dict) -> dict:
     """
-    Writes CurrentOccupancy + ComplianceStatus to Pset_FireSafetyStatus
-    for every occupied room. Single batched Blender round trip per tick.
-    This is the live Digital Twin write-back — values persist in the IFC file.
+    Writes CurrentOccupancy + MaxOccupancy + ComplianceStatus to
+    Pset_FireSafetyStatus for every occupied room. Single batched
+    Blender round trip per tick. This is the live Digital Twin
+    write-back — values persist in the IFC file.
+
+    Fix applied: MaxOccupancy was previously never written here, even
+    though max_occ is computed fresh every call via get_max_occupancy()
+    and used to decide ComplianceStatus. Whatever MaxOccupancy value a
+    room's Pset happened to display came from somewhere outside this
+    function entirely (most likely baked into the IFC model itself,
+    not written by any Python script), so the compliance decision and
+    the displayed capacity number could show as self-contradictory —
+    e.g. CurrentOccupancy=2, MaxOccupancy=1, ComplianceStatus=PASS —
+    whenever get_max_occupancy() and that external source disagreed,
+    with no way to trace the decision from the Pset alone. Now writes
+    the exact max_occ value the compliance decision was actually based
+    on, so the Pset is self-consistent and auditable on its own.
     """
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -82,6 +97,7 @@ try:
                 pset=target,
                 properties={{
                     "CurrentOccupancy" : current,
+                    "MaxOccupancy"     : max_occ,
                     "ComplianceStatus" : compliance,
                     "LastUpdatedBy"    : "SimulationTick",
                 }})
@@ -144,9 +160,18 @@ def write_fire_alarm_status(fire_node_label: str, active: bool) -> dict:
 
 def reset_all_psets() -> dict:
     """
-    Resets FireAlarmStatus to False on all rooms.
+    Resets FireAlarmStatus to False on all rooms, and MaxOccupancy to
+    the real value from get_max_occupancy() so a fresh reset can't
+    leave a stale or externally-sourced capacity number sitting next
+    to a freshly-reset CurrentOccupancy=0 / ComplianceStatus=UNKNOWN.
     Call this between evaluation scenarios to clear previous state.
     """
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from sensors.building_graph import BUILDING_GRAPH, get_max_occupancy
+
+    label_to_node = {d["label"]: n for n, d in BUILDING_GRAPH.nodes(data=True)}
+
     reset_count = 0
     errors      = []
 
@@ -155,12 +180,17 @@ def reset_all_psets() -> dict:
             continue
         try:
             from bim.ifc_bridge import update_ifc_pset_properties
-            update_ifc_pset_properties(gid, "Pset_FireSafetyStatus", {
+            node    = label_to_node.get(label)
+            max_occ = get_max_occupancy(node) if node is not None else None
+            props = {
                 "CurrentOccupancy" : 0,
                 "ComplianceStatus" : "UNKNOWN",
                 "FireAlarmStatus"  : False,
                 "LastUpdatedBy"    : "System",
-            })
+            }
+            if max_occ is not None:
+                props["MaxOccupancy"] = max_occ
+            update_ifc_pset_properties(gid, "Pset_FireSafetyStatus", props)
             reset_count += 1
         except Exception as e:
             errors.append(f"{label}: {e}")

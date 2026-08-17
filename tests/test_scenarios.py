@@ -411,7 +411,7 @@ def run_scenarios_with_trials(scenarios_to_run: List[str], num_trials: int = 1):
             "trials": trials_data
         }
 
-    # Print Final Academic Evaluation Matrix
+    # Print Final Evaluation Matrix
     print("\n\n" + "═"*70)
     print("  FINAL EVALUATION METRICS SUMMARY")
     print("═"*70)
