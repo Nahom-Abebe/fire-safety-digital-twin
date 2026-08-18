@@ -1,7 +1,7 @@
 # agent/agent.py
 # Claude Sense-Reason-Act agent for care home occupancy management.
 #
-# Design philosophy (aligned with Peter Lawrence's emails):
+# Design philosophy:
 #   - This is an OCCUPANCY MANAGEMENT system, not an evacuation system
 #   - The agent monitors room capacity tick by tick
 #   - When a room approaches or exceeds its ADB limit, the agent:
@@ -83,23 +83,10 @@ Step 4: Identify the SPECIFIC clause that justifies your action, e.g.:
 ACT:
 For each genuine violation (check_compliance returns FAIL or WARNING):
 
-1. Call act_update_sign for the corridor sign serving that floor.
-   Sign messages must be SHORT and PRACTICAL — like real building signage.
-   No ADB references on signs. Just clear instructions for occupants.
-
-   Good sign message examples:
-   - "Room 1-A is full — please use the lounge on Floor 2"
-   - "Do not enter Room 0-4 — use Room 0-6 instead"
-   - "This corridor is busy — please use the north stairwell"
-   - "Wheelchair users: proceed to refuge area on this floor"
-   - "Room 3-1 at capacity — staff please redirect residents"
-
-   Bad sign message examples (DO NOT use these):
-   - "Room 1-16 at capacity per ADB Cl.2.43 — use alt route"
-   - "BLOCKED per ADB Vol2 Section 2.33 — residential care home"
-
-   Status: "BLOCKED" for OVER capacity, "ALTERNATE" for WARNING
-   The ADB citation goes in the board directive and logs — NOT on the sign.
+1. Call act_update_sign for the corridor sign serving that floor:
+   - Message must state WHICH room is affected and WHY (citing ADB clause)
+   - Example: "Room 1-16 (Bedroom) at capacity per ADB Cl.2.43 - use alt route"
+   - Status: "BLOCKED" for OVER capacity, "ALTERNATE" for WARNING
 
 2. Call act_set_room_attractiveness for the affected room:
    - OVER capacity  to value 0.0 (fully discourage new occupants entering)
@@ -212,12 +199,17 @@ def _call_tool(tool_name: str, tool_input: dict,
                        f"Result: {status.upper()}")
 
             elif tool_name == "act_update_sign":
-                sign = tool_input.get("sign_id", "")
-                msg  = tool_input.get("message", "")[:40]
-                ref  = tool_input.get("adb_ref", "")[:35]
+                sign   = tool_input.get("sign_id", "")
+                msg    = tool_input.get("message", "")[:40]
+                ref    = tool_input.get("adb_ref", "")[:35]
+                # Was hardcoded "BLOCKED" regardless of actual status —
+                # a WARNING-severity ALTERNATE action showed as a full
+                # block on this live reasoning display. Now reflects
+                # the real status the tool call was actually given.
+                status = tool_input.get("status", "BLOCKED")
                 _board(snapshot,
                        f"ACTION: Sign updated\n"
-                       f"{sign} -> BLOCKED\n"
+                       f"{sign} -> {status}\n"
                        f"{msg}\n"
                        f"Ref: {ref}")
 
@@ -293,8 +285,31 @@ def run_agent_cycle(client: anthropic.Anthropic,
             signs_updated = sum(
                 1 for t in trace if t["tool"] == "act_update_sign")
 
+            # The actual structured board directive (CYCLE/ROOMS/ADB/
+            # SIGNS/ACTION/ESCALATE) is posted as the agent_message
+            # argument to act_update_board, per the system prompt —
+            # not necessarily repeated in the model's final end_turn
+            # text, which is often just a brief wrap-up after the tool
+            # call has already fired. Using final_text alone meant
+            # both the returned "directive" and the adb_cited check
+            # could reflect that generic wrap-up instead of the real
+            # directive — and live_agent_runner.py posting that wrong
+            # text to the board immediately after run_agent_cycle()
+            # returns would visibly overwrite the correct directive
+            # act_update_board's own live dispatch had just written
+            # moments earlier. Prefer the last act_update_board call's
+            # actual content; fall back to final_text only if the
+            # agent never called it.
+            board_directive = None
+            for t in reversed(trace):
+                if t["tool"] == "act_update_board":
+                    board_directive = t["input"].get("agent_message", "")
+                    break
+
+            directive_text = board_directive or final_text
+
             adb_cited = any(
-                keyword in final_text
+                keyword in directive_text
                 for keyword in [
                     "Section 2.", "Clause 2.", "Table 2.", "Table B1",
                     "Appendix D", "2.33", "2.43", "2.37", "ADB Vol2 p.",
@@ -303,7 +318,7 @@ def run_agent_cycle(client: anthropic.Anthropic,
             )
 
             return {
-                "directive"      : final_text,
+                "directive"      : directive_text,
                 "trace"          : trace,
                 "latency_seconds": latency,
                 "tool_count"     : len(trace),

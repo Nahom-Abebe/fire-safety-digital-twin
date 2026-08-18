@@ -1,75 +1,23 @@
 # bim/manager_panel.py
-# Building manager overlay — ESCALATE triggers smooth pathfinding evacuation.
-# Paths: room → corridor → exit → assembly point 
+# Building manager overlay — ESCALATE triggers a real, signage-aware
+# pathfinding evacuation.
+#
+# Path computation and cone animation now live entirely in
+# bim/assembly_point.py (compute_signage_aware_evacuation_paths() +
+# animate_evacuation_via_paths()) rather than being duplicated here.
+# The previous local _build_simple_paths() used a fixed 3-hop guess
+# (nearest corridor -> a hardcoded exit fallback -> assembly) with no
+# awareness of current sign state at all. The new version is a real
+# networkx shortest path per occupant that penalises any node the
+# graph currently marks sign_blocked — the same property normal-
+# operation movement already reacts to — so evacuating occupants
+# genuinely route around whatever the signage is currently telling
+# them to avoid, using data that's already real elsewhere in the
+# project rather than a new rule invented just for escalation.
 
-import os, sys, json, random
+import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bim.ifc_bridge import send_to_blender
-
-# Temp file for passing paths to Blender
-BIM_DIR    = os.path.dirname(os.path.abspath(__file__))
-PATHS_FILE = os.path.join(BIM_DIR, "_evac_paths.json").replace("\\", "/")
-
-
-def _build_simple_paths(snapshot: dict, centroids: dict) -> dict:
-    """
-    Builds 3-waypoint paths for every cone:
-      1. Nearest corridor centroid on same floor
-      2. Ground floor exit centroid
-      3. Assembly point with jitter
-
-    Simple lookup — no BFS, no freeze.
-    Returns {marker_id_str: [[x,y,z], [x,y,z], [x,y,z]]}
-    """
-    from sensors.building_graph import BUILDING_GRAPH as G
-
-    occupancy = snapshot.get("occupancy", {})
-
-    # Find exit centroid
-    exit_cent = None
-    for label, c in centroids.items():
-        if "EXIT" in label.upper() or "exit" in label.lower():
-            exit_cent = c
-            break
-    if exit_cent is None:
-        exit_cent = {"x": 16.0, "y": -18.0, "z": 0.0}
-
-    ASSEMBLY_X, ASSEMBLY_Y, ASSEMBLY_Z = 16.0, -35.0, 0.85
-
-    # Build floor → corridor centroid lookup
-    floor_corridor = {}
-    for cl, c in centroids.items():
-        n = next((nd for nd, d in G.nodes(data=True) if d["label"] == cl), None)
-        if n and G.nodes[n].get("node_type") == "corridor":
-            fl = G.nodes[n].get("floor", "")
-            if fl not in floor_corridor:
-                floor_corridor[fl] = c
-
-    rng       = random.Random(42)
-    paths     = {}
-    marker_id = 0
-
-    for label, count in occupancy.items():
-        node = next((n for n, d in G.nodes(data=True)
-                     if d["label"] == label), None)
-        if node is None:
-            marker_id += count
-            continue
-
-        floor         = G.nodes[node].get("floor", "")
-        corridor_cent = floor_corridor.get(floor, exit_cent)
-
-        for _ in range(count):
-            jx = (rng.random() - 0.5) * 14.0
-            jy = (rng.random() - 0.5) * 14.0
-            paths[str(marker_id)] = [
-                [corridor_cent["x"], corridor_cent["y"], corridor_cent["z"] + 0.85],
-                [exit_cent["x"],     exit_cent["y"],     exit_cent["z"] + 0.85],
-                [ASSEMBLY_X + jx,    ASSEMBLY_Y + jy,    ASSEMBLY_Z],
-            ]
-            marker_id += 1
-
-    return paths
 
 
 def install_manager_panel():
@@ -135,14 +83,70 @@ def install_manager_panel():
         "    _rect(b['r']['x'], b['r']['y'], b['r']['w'], b['r']['h'], cr)",
         "    _rect(b['e']['x'], b['e']['y'], 5, b['e']['h'], (1, 0.3, 0.3, 0.9))",
         "    _rect(b['r']['x'], b['r']['y'], 5, b['r']['h'], (0.3, 1, 0.4, 0.9))",
-        "    _text('ESCALATE TO ASSEMBLY POINT', b['e']['x']+14, b['e']['y']+18, sz=12)",
-        "    _text('RESET ALL SIGNS TO CLEAR',   b['r']['x']+14, b['r']['y']+18, sz=12)",
+        "    _text('ESCALATE TO ASSEMBLY POINT', b['e']['x']+14, b['e']['y']+20, sz=12)",
+        "    _text('Shift+E', b['e']['x']+14, b['e']['y']+6, sz=9, col=(1,1,1,0.5))",
+        "    _text('RESET ALL SIGNS TO CLEAR',   b['r']['x']+14, b['r']['y']+20, sz=12)",
+        "    _text('Shift+R', b['r']['x']+14, b['r']['y']+6, sz=9, col=(1,1,1,0.5))",
         "",
         "# ── ESCALATE ──────────────────────────────────────────────────",
-        f"PATHS_FILE = r'{PATHS_FILE}'",
+        "# Path computation and cone animation now live entirely in",
+        "# bim/assembly_point.py — compute_signage_aware_evacuation_paths()",
+        "# uses a real networkx shortest path per occupant, penalising any",
+        "# node the graph currently marks sign_blocked (the same property",
+        "# normal-operation movement already reacts to), and",
+        "# animate_evacuation_via_paths() drives the walk at fixed speed.",
+        "# This file no longer duplicates that logic locally.",
         "",
         "def _escalate():",
-        "    import sys, json; sys.path.insert(0, ROOT)",
+        "    import sys, importlib; sys.path.insert(0, ROOT)",
+        "",
+        "    # Blender's Python process stays alive across every",
+        "    # phase1_setup.py run in this session — unlike the external",
+        "    # calling scripts, which start fresh each time and always",
+        "    # see the current file, Blender's sys.modules cache can hold",
+        "    # an already-imported, now-stale version of a module edited",
+        "    # since it was first imported this session. Force-reloading",
+        "    # here means _escalate() always runs against whatever is",
+        "    # CURRENTLY on disk, not whatever Blender happened to load",
+        "    # the first time these modules were touched this session.",
+        "    for _modname in ('sensors.building_graph', 'sensors.sensor_sim',",
+        "                     'bim.room_geometry', 'bim.assembly_point'):",
+        "        if _modname in sys.modules:",
+        "            try: importlib.reload(sys.modules[_modname])",
+        "            except Exception as _e: print(f'Reload warning ({_modname}): {_e}')",
+        "",
+        "    # Step 0 — release control from any baked fix_and_bake.py demo.",
+        "    # If a scenario's keyframed animation is still active on the",
+        "    # cones, fix_and_bake.py's external driving loop keeps calling",
+        "    # frame_set() every ~0.08s, which forces Blender to snap each",
+        "    # cone's .location back to its baked keyframe on every single",
+        "    # call — directly fighting the evacuation timer's own writes",
+        "    # to the same property at a similar frequency, which is what",
+        "    # produces visible jitter/vibration instead of clean movement.",
+        "    # The scene's frame_change_pre handler that drives the board",
+        "    # and sign text/colour from the baked per-tick schedule has",
+        "    # the same conflict, just less visually obvious as a colour",
+        "    # flicker than as position jitter. Clearing both here means",
+        "    # ESCALATE takes full, uncontested control regardless of",
+        "    # whether it's pressed from phase1_setup.py (nothing to",
+        "    # clear, harmless no-op), a live fix_and_bake.py demo, or",
+        "    # live_agent_runner.py.",
+        "    try:",
+        "        import bpy",
+        "        cleared = 0",
+        "        for obj in bpy.data.objects:",
+        "            if obj.name.startswith('Occupant_') and obj.animation_data:",
+        "                obj.animation_data_clear()",
+        "                cleared += 1",
+        "        removed_handlers = 0",
+        "        for fn in [f for f in bpy.app.handlers.frame_change_pre",
+        "                  if f.__name__ == '_board_handler']:",
+        "            bpy.app.handlers.frame_change_pre.remove(fn)",
+        "            removed_handlers += 1",
+        "        print(f'Released baked animation: {cleared} cones, '",
+        "              f'{removed_handlers} board/sign handler(s)')",
+        "    except Exception as e:",
+        "        print(f'Baked-animation release warning: {e}')",
         "",
         "    # Step 1 — lower attractiveness",
         "    try:",
@@ -155,82 +159,103 @@ def install_manager_panel():
         "    except Exception as e:",
         "        print(f'Attractiveness error: {e}')",
         "",
-        "    # Step 2 — build paths and save to file (avoids f-string curly brace bug)",
-        "    try:",
-        "        from sensors.sensor_sim import get_sensor_snapshot",
-        "        from bim.room_geometry import load_room_centroids",
-        "        from bim.manager_panel import _build_simple_paths",
-        "        snap      = get_sensor_snapshot()",
-        "        centroids = load_room_centroids()",
-        "        paths     = _build_simple_paths(snap, centroids)",
-        "        with open(PATHS_FILE, 'w') as fp:",
-        "            json.dump(paths, fp)",
-        "        print(f'Saved paths for {len(paths)} cones to {PATHS_FILE}')",
-        "    except Exception as e:",
-        "        print(f'Path build error: {e}')",
-        "        paths = {}",
-        "",
-        "    # Step 3 — one Blender call: signs red + start timer (reads file)",
+        "    # Step 2 — signs red (one Blender call)",
         "    from bim.ifc_bridge import send_to_blender as _s",
-        "    _s(",
-        "        'import bpy, json, math, os\\n'",
-        "        'RED = (0.90, 0.05, 0.05, 1.0)\\n'",
-        "        'for obj in bpy.data.objects:\\n'",
-        "        '    if obj.name.startswith(\"SignPanel_\") and obj.data and obj.data.materials:\\n'",
-        "        '        nd = obj.data.materials[0].node_tree.nodes.get(\"Principled BSDF\")\\n'",
-        "        '        if nd:\\n'",
-        "        '            nd.inputs[\"Base Color\"].default_value = RED\\n'",
-        "        '            if \"Emission Color\" in nd.inputs: nd.inputs[\"Emission Color\"].default_value = RED\\n'",
-        "        '            if \"Emission Strength\" in nd.inputs: nd.inputs[\"Emission Strength\"].default_value = 3.0\\n'",
-        "        '    if obj.name.startswith(\"SignText_\"):\\n'",
-        "        '        obj.data.body = \"ESCALATED\\\\nProceed to\\\\nAssembly Point\"\\n'",
-        f"        'PATHS_FILE = r\"{PATHS_FILE}\"\\n'",
-        "        'all_paths = {}\\n'",
-        "        'try:\\n'",
-        "        '    with open(PATHS_FILE) as fp: all_paths = json.load(fp)\\n'",
-        "        '    print(f\"Loaded paths for {len(all_paths)} cones\")\\n'",
-        "        'except Exception as e: print(f\"Path load error: {e}\")\\n'",
-        "        'ORANGE = (0.95, 0.55, 0.10, 1.0)\\n'",
-        "        'wp_idx = {mid: 0 for mid in all_paths}\\n'",
-        "        'for mid in all_paths:\\n'",
-        "        '    obj = bpy.data.objects.get(f\"Occupant_{int(mid):03d}\")\\n'",
-        "        '    if obj:\\n'",
-        "        '        obj.color = ORANGE\\n'",
-        "        '        if obj.data and obj.data.materials:\\n'",
-        "        '            bsdf = obj.data.materials[0].node_tree.nodes.get(\"Principled BSDF\")\\n'",
-        "        '            if bsdf:\\n'",
-        "        '                bsdf.inputs[\"Base Color\"].default_value = ORANGE\\n'",
-        "        '                bsdf.inputs[\"Emission Color\"].default_value = ORANGE\\n'",
-        "        'SPEED = 0.35\\n'",
-        "        'INTERVAL = 0.06\\n'",
-        "        'THRESH = 0.25\\n'",
-        "        'def _walk():\\n'",
-        "        '    all_done = True\\n'",
-        "        '    for mid, wps in all_paths.items():\\n'",
-        "        '        idx = wp_idx.get(mid, 0)\\n'",
-        "        '        if idx >= len(wps): continue\\n'",
-        "        '        all_done = False\\n'",
-        "        '        obj = bpy.data.objects.get(f\"Occupant_{int(mid):03d}\")\\n'",
-        "        '        if not obj: wp_idx[mid] = idx+1; continue\\n'",
-        "        '        tx,ty,tz = wps[idx]\\n'",
-        "        '        dx,dy,dz = tx-obj.location.x, ty-obj.location.y, tz-obj.location.z\\n'",
-        "        '        dist = math.sqrt(dx*dx+dy*dy+dz*dz)\\n'",
-        "        '        if dist < THRESH: wp_idx[mid] = idx+1\\n'",
-        "        '        else:\\n'",
-        "        '            f = min(SPEED/dist, 1.0)\\n'",
-        "        '            obj.location.x += dx*f\\n'",
-        "        '            obj.location.y += dy*f\\n'",
-        "        '            obj.location.z += dz*f\\n'",
-        "        '    for area in bpy.context.screen.areas:\\n'",
-        "        '        if area.type==\"VIEW_3D\": area.tag_redraw()\\n'",
-        "        '    if all_done: print(\"All cones reached assembly point\"); return None\\n'",
-        "        '    return INTERVAL\\n'",
-        "        'if bpy.app.timers.is_registered(_walk): bpy.app.timers.unregister(_walk)\\n'",
-        "        'bpy.app.timers.register(_walk, first_interval=0.2)\\n'",
-        "        'for area in bpy.context.screen.areas:\\n'",
-        "        '    if area.type==\"VIEW_3D\": area.tag_redraw()\\n'",
-        "        f'print(\"Walking cones to assembly point via {PATHS_FILE}\")\\n'",
-        "    )",
+        "    _s(r'''",
+        "import bpy",
+        "RED = (0.90, 0.05, 0.05, 1.0)",
+        "for obj in bpy.data.objects:",
+        "    if obj.name.startswith('SignPanel_') and obj.data and obj.data.materials:",
+        "        nd = obj.data.materials[0].node_tree.nodes.get('Principled BSDF')",
+        "        if nd:",
+        "            nd.inputs['Base Color'].default_value = RED",
+        "            if 'Emission Color' in nd.inputs: nd.inputs['Emission Color'].default_value = RED",
+        "            if 'Emission Strength' in nd.inputs: nd.inputs['Emission Strength'].default_value = 3.0",
+        "    if obj.name.startswith('SignText_'):",
+        "        obj.data.body = 'ESCALATED\\nProceed to\\nAssembly Point'",
+        "for area in bpy.context.screen.areas:",
+        "    if area.type == 'VIEW_3D': area.tag_redraw()",
+        "print('Signs updated to RED')",
+        "''')",
+        "",
+        "    # Step 3 — real signage-aware paths + fixed-speed walk,",
+        "    # both now owned by bim/assembly_point.py. No sensor_sim",
+        "    # snapshot here — this code runs inside Blender's own",
+        "    # process, where a fresh sensor_sim import is always",
+        "    # uninitialised/empty regardless of what phase1_setup.py,",
+        "    # phase2_runner.py, or live_agent_runner.py did in their",
+        "    # own separate processes. compute_signage_aware_evacuation_",
+        "    # paths() resolves each cone's current room from its real,",
+        "    # live position in the Blender scene instead.",
+        "    #",
+        "    # Diagnostics written to the FireSafetyBoard itself, not just",
+        "    # the system console, so a failure here is actually visible",
+        "    # in the viewport rather than silent.",
+        "    try:",
+        "        import bpy, traceback",
+        "        from bim.room_geometry import load_room_centroids",
+        "        from bim.assembly_point import (",
+        "            compute_signage_aware_evacuation_paths,",
+        "            animate_evacuation_via_paths,",
+        "        )",
+        "",
+        "        cone_count = sum(1 for o in bpy.data.objects",
+        "                        if o.name.startswith('Occupant_'))",
+        "",
+        "        centroids = load_room_centroids()",
+        "        paths, refuge_info = compute_signage_aware_evacuation_paths(centroids)",
+        "",
+        "        board = bpy.data.objects.get('FireSafetyBoard')",
+        "",
+        "        # Wheelchair users on F1-F3 stay on their own floor rather",
+        "        # than evacuate via stairs — mirrors agent_walk.py's TS-04",
+        "        # mobility_refuge behaviour and real ADB practice (standard",
+        "        # fire escape stairs generally aren't usable by a non-",
+        "        # ambulant wheelchair user; they wait at a refuge for",
+        "        # assisted evacuation). A wheelchair user already on the",
+        "        # ground floor evacuates normally — no stairs needed.",
+        "        refuge_lines = []",
+        "        for r in refuge_info:",
+        "            short_floor = r['floor'].split(' ')[0]",
+        "            refuge_lines.append(",
+        "                f'ALERT: Wheelchair user awaiting')",
+        "            refuge_lines.append(",
+        "                f'assistance - {short_floor}')",
+        "",
+        "        if not paths:",
+        "            msg = (f'ESCALATE: 0 paths computed\\n'",
+        "                   f'{cone_count} cones found in scene\\n'",
+        "                   f'Check console for details')",
+        "            print(f'ESCALATE WARNING: {cone_count} cones found but 0 paths computed')",
+        "            if board: board.data.body = msg",
+        "        else:",
+        "            animate_evacuation_via_paths(paths)",
+        "            evac_count = len(paths) - len(refuge_info)",
+        "            msg_lines = [",
+        "                'ESCALATED',",
+        "                f'{evac_count}/{cone_count} cones walking',",
+        "                'to Assembly Point',",
+        "            ] + refuge_lines",
+        "            msg = '\\n'.join(msg_lines)",
+        "            print(f'Signage-aware evacuation started: '",
+        "                  f'{evac_count}/{cone_count} evacuating, '",
+        "                  f'{len(refuge_info)} at refuge')",
+        "            if board: board.data.body = msg",
+        "",
+        "    except Exception as e:",
+        "        err_type = type(e).__name__",
+        "        print(f'Evacuation path error [{err_type}]: {e}')",
+        "        print(traceback.format_exc())",
+        "        try:",
+        "            import bpy",
+        "            board = bpy.data.objects.get('FireSafetyBoard')",
+        "            if board:",
+        "                board.data.body = (f'ESCALATE FAILED\\n'",
+        "                                   f'{err_type}: {str(e)[:60]}\\n'",
+        "                                   f'See Blender system console')",
+        "        except Exception:",
+        "            pass",
+        "",
         "    print('Escalation triggered')",
         "",
         "# ── RESET ─────────────────────────────────────────────────────",
@@ -294,6 +319,7 @@ def install_manager_panel():
         "    def draw(self, ctx):",
         "        l = self.layout",
         "        l.label(text='Click buttons bottom-left of viewport')",
+        "        l.label(text='Shift+E escalate  |  Shift+R reset')",
         "        l.separator()",
         "        r = l.row(); r.scale_y = 2.0; r.alert = True",
         "        r.operator('firesafety.escalate', text='ESCALATE', icon='ERROR')",

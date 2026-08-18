@@ -6,6 +6,46 @@
 #   - p.25  Table 2.1    "Travel distance limits"
 #   - p.17  Table B1     "Purpose Group 2a classification"
 #   - p.221 Index        "Residential care homes 2.37"
+#
+# Fixes applied:
+#
+#   1. retrieve_regulations() was defined TWICE. Python silently kept
+#      only the second definition, so the caching implementation right
+#      above it — _REGULATION_CACHE and all — was dead code that never
+#      ran. Every call re-embedded the query and re-hit ChromaDB even
+#      for an identical repeated query within the same tick. Merged
+#      into one definition; caching now actually executes.
+#
+#   2. retrieve_care_home_regulations() accepted current_occ/max_occ
+#      but never referenced them anywhere in the function body — a
+#      room at 4/3 and 40/3 retrieved identically. Removed from this
+#      function's signature; get_adb_context() (which DOES use them,
+#      for its header text) is unaffected.
+#
+#   3. The violation_type == "bedroom" branch could never fire through
+#      the real call path — get_adb_context() only ever sets
+#      violation_type to "pre_emptive" or room_type's own value, never
+#      the literal string "bedroom". Removed the dead branch; bedroom
+#      coverage already comes from the room_type == "room" branch,
+#      which does fire in practice (confirmed in the self-test output).
+#
+#   4. query_keys were built generic-first (general_provisions,
+#      purpose_group) then room-type-specific keys appended after, and
+#      truncated to ordered[:3] before running. For any corridor/lobby
+#      scenario this meant travel_distance — the single most relevant
+#      concept for that room type — was silently dropped every time,
+#      purely due to list position. Confirmed directly in the module's
+#      own self-test: p.25 (Table 2.1, travel distance) and p.37
+#      (Section 2.33, general provisions) never appeared once across
+#      four examples specifically built to surface them. Query order
+#      is now room-type-specific keys FIRST, generic context keys
+#      last, and the cap raised from 3 to 4 so both specific and
+#      generic queries usually survive rather than only ever the
+#      generic ones.
+#
+#   5. Text snippets truncated by raw character count, visibly cutting
+#      mid-word in the module's own output ("separate bed", "editi").
+#      Now truncates at the last word boundary before the limit.
 
 import os
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
@@ -29,21 +69,52 @@ _model      = None
 
 _REGULATION_CACHE = {}
 
+
+def _init():
+    global _client, _collection, _model
+    if _collection is not None:
+        return
+    _client = chromadb.PersistentClient(path=DB_PATH)
+    _model  = SentenceTransformer(MODEL_NAME)
+    try:
+        _collection = _client.get_collection(name=COLLECTION_NAME)
+        print(f"RAG: loaded '{COLLECTION_NAME}' ({_collection.count()} chunks)")
+    except Exception as e:
+        raise RuntimeError(
+            f"ChromaDB collection '{COLLECTION_NAME}' not found. "
+            f"Run build_rag.py first. Error: {e}"
+        )
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Truncates at the last word boundary before limit, not mid-word."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    last_space = cut.rfind(" ")
+    if last_space > 0:
+        cut = cut[:last_space]
+    return cut + "..."
+
+
+# ── Core retrieval ────────────────────────────────────────────────────────────
+
 def retrieve_regulations(query: str, n: int = 3) -> list:
     """
-    Retrieves relevant ADB Vol2 passages via RAG.
-    Results are cached per query for the session duration —
-    the ADB document does not change between ticks so
-    repeated identical queries return the same passages.
+    General-purpose ADB retrieval. Returns top-n most relevant passages
+    for any query. Each result: {text, section_hint, distance}
+
+    Cached per (query, n) for the session — the ADB document doesn't
+    change between ticks, so a repeated identical query returns the
+    cached result instead of re-embedding and re-querying ChromaDB.
     """
     _init()
 
-    # Check cache first
     cache_key = f"{query}|{n}"
     if cache_key in _REGULATION_CACHE:
         return _REGULATION_CACHE[cache_key]
 
-    # Cache miss — run the vector search
     embedding = _model.encode([query]).tolist()
     results   = _collection.query(
         query_embeddings=embedding,
@@ -60,49 +131,8 @@ def retrieve_regulations(query: str, n: int = 3) -> list:
         for i in range(len(results["documents"][0]))
     ]
 
-    # Store in cache
     _REGULATION_CACHE[cache_key] = passages
     return passages
-
-def _init():
-    global _client, _collection, _model
-    if _collection is not None:
-        return
-    _client     = chromadb.PersistentClient(path=DB_PATH)
-    _model      = SentenceTransformer(MODEL_NAME)
-    try:
-        _collection = _client.get_collection(name=COLLECTION_NAME)
-        print(f"RAG: loaded '{COLLECTION_NAME}' ({_collection.count()} chunks)")
-    except Exception as e:
-        raise RuntimeError(
-            f"ChromaDB collection '{COLLECTION_NAME}' not found. "
-            f"Run build_rag.py first. Error: {e}"
-        )
-
-
-# ── Core retrieval ────────────────────────────────────────────────────────────
-
-def retrieve_regulations(query: str, n: int = 3) -> list:
-    """
-    General-purpose ADB retrieval.
-    Returns top-n most relevant passages for any query.
-    Each result: {text, section_hint, distance}
-    """
-    _init()
-    embedding = _model.encode([query]).tolist()
-    results   = _collection.query(
-        query_embeddings=embedding,
-        n_results=n,
-        include=["documents", "metadatas", "distances"]
-    )
-    return [
-        {
-            "text"        : results["documents"][0][i],
-            "section_hint": results["metadatas"][0][i].get("section_hint", "ADB Vol2"),
-            "distance"    : round(results["distances"][0][i], 4),
-        }
-        for i in range(len(results["documents"][0]))
-    ]
 
 
 # ── Care-home-specific retrieval ──────────────────────────────────────────────
@@ -138,29 +168,30 @@ _CARE_HOME_QUERIES = {
 
 
 def retrieve_care_home_regulations(violation_type: str = "overcrowding",
-                                   room_type: str = "room",
-                                   current_occ: int = 0,
-                                   max_occ: int = 0) -> list:
+                                   room_type: str = "room") -> list:
     """
     Retrieves ADB clauses specifically relevant to care home occupancy
-    management. Selects query strategies based on what type of room/space
-    is affected and the nature of the violation.
+    management. Selects query strategies based on what type of room/
+    space is affected and the nature of the violation.
 
-    violation_type : "overcrowding" | "pre_emptive" | "corridor" | "bedroom"
+    violation_type : "overcrowding" | "pre_emptive" | "corridor"
     room_type      : "room" | "corridor" | "stair" | "lobby"
-    current_occ    : current occupant count in the affected space
-    max_occ        : ADB-defined maximum for that space
 
-    Returns a deduplicated list of the most relevant passages,
-    each tagged with section_hint for citation.
+    Returns a deduplicated list of the most relevant passages, each
+    tagged with section_hint for citation.
+
+    Query order is room-type-specific keys FIRST, generic context
+    (general_provisions, purpose_group) LAST — see module docstring,
+    fix 4. The old generic-first order meant travel_distance was
+    silently dropped for every corridor/lobby scenario purely due to
+    list position, not relevance.
     """
     _init()
 
-    # Select query strategies based on context
-    query_keys = ["general_provisions", "purpose_group"]
+    query_keys = []
 
     if room_type in ("corridor", "lobby"):
-        query_keys += ["horizontal_escape", "travel_distance"]
+        query_keys += ["travel_distance", "horizontal_escape"]
     elif room_type == "room":
         query_keys += ["bedroom_occupancy", "travel_distance"]
     elif room_type == "stair":
@@ -169,12 +200,13 @@ def retrieve_care_home_regulations(violation_type: str = "overcrowding",
         query_keys += ["travel_distance", "horizontal_escape"]
 
     if violation_type == "pre_emptive":
-        # Pre-emptive warning — add travel distance focus
         query_keys += ["travel_distance", "horizontal_escape"]
     elif violation_type == "corridor":
         query_keys += ["horizontal_escape"]
-    elif violation_type == "bedroom":
-        query_keys += ["bedroom_occupancy", "stair_access"]
+
+    # Generic context — always relevant, but never at the expense of
+    # the room-type-specific queries above, so added last.
+    query_keys += ["general_provisions", "purpose_group"]
 
     # Remove duplicates while preserving priority order
     seen = set()
@@ -184,24 +216,21 @@ def retrieve_care_home_regulations(violation_type: str = "overcrowding",
             seen.add(k)
             ordered.append(k)
 
-    # Run top-3 most relevant queries and collect results
+    # Run top-4 (was top-3) most relevant query strategies
     all_results = []
     seen_texts  = set()
-    for key in ordered[:3]:
+    for key in ordered[:4]:
         query   = _CARE_HOME_QUERIES[key]
         results = retrieve_regulations(query, n=2)
         for r in results:
-            # Deduplicate by first 80 chars of text
             fingerprint = r["text"][:80]
             if fingerprint not in seen_texts:
                 seen_texts.add(fingerprint)
                 r["query_strategy"] = key
                 all_results.append(r)
 
-    # Sort by distance (lower = more relevant)
     all_results.sort(key=lambda x: x["distance"])
-
-    return all_results[:4]  # return top 4 deduplicated results
+    return all_results[:4]
 
 
 def get_adb_context(room_label: str,
@@ -210,14 +239,15 @@ def get_adb_context(room_label: str,
                     max_occ: int,
                     pre_emptive: bool = False) -> str:
     """
-    Convenience wrapper used by the Claude agent.
-    Builds a structured ADB context string with specific clause references
-    that the agent can cite directly in its board directive.
+    Convenience wrapper used by the Claude agent. Builds a structured
+    ADB context string with specific clause references the agent can
+    cite directly in its board directive.
 
     room_label  : graph label e.g. '0-4', '0-A'
     room_type   : 'room' | 'corridor' | 'stair' | 'lobby'
-    current_occ : current occupant count
-    max_occ     : ADB-defined maximum
+    current_occ : current occupant count — used for the header text
+                  and ratio calculation below, not for query selection
+    max_occ     : ADB-defined maximum — same
     pre_emptive : True if approaching capacity (80%+) but not yet exceeded
 
     Returns formatted string: "[Section] Clause text..."
@@ -227,15 +257,13 @@ def get_adb_context(room_label: str,
     passages = retrieve_care_home_regulations(
         violation_type=violation_type,
         room_type=room_type,
-        current_occ=current_occ,
-        max_occ=max_occ
     )
 
     if not passages:
         return "ADB Vol2 — no relevant passage retrieved for this query"
 
-    ratio   = round(current_occ / max_occ * 100) if max_occ > 0 else 0
-    status  = "approaching capacity" if pre_emptive else "EXCEEDED"
+    ratio  = round(current_occ / max_occ * 100) if max_occ > 0 else 0
+    status = "approaching capacity" if pre_emptive else "EXCEEDED"
 
     header = (
         f"Room {room_label} ({room_type}) — occupancy {status}: "
@@ -246,7 +274,7 @@ def get_adb_context(room_label: str,
     parts = []
     for p in passages:
         section = p["section_hint"]
-        text    = p["text"][:350].strip()
+        text    = _truncate(p["text"], 350)
         parts.append(f"[{section}] {text}")
 
     return header + "\n---\n".join(parts)
@@ -261,11 +289,10 @@ if __name__ == "__main__":
 
     print("\n1. General care home provisions:")
     for r in retrieve_care_home_regulations(
-            violation_type="overcrowding", room_type="corridor",
-            current_occ=5, max_occ=3):
+            violation_type="overcrowding", room_type="corridor"):
         print(f"  [{r['section_hint']}] dist={r['distance']} "
               f"strategy={r['query_strategy']}")
-        print(f"  {r['text'][:200].strip()}")
+        print(f"  {_truncate(r['text'], 200)}")
         print()
 
     print("\n2. Bedroom overcrowding context:")
@@ -278,5 +305,5 @@ if __name__ == "__main__":
     for r in retrieve_regulations(
             "Purpose Group 2a residential care sleeping accommodation", n=2):
         print(f"  [{r['section_hint']}] dist={r['distance']}")
-        print(f"  {r['text'][:200].strip()}")
+        print(f"  {_truncate(r['text'], 200)}")
         print()

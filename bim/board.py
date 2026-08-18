@@ -1,9 +1,49 @@
 # bim/board.py
 # Building manager's dashboard text panel in Blender.
+#
+# Fix applied — evacuation-mode floor coloring was a silent no-op:
+#
+#   floor_names = ['F0 Ground Floor', ...]
+#   fl_obj = bpy.data.objects.get(fl_name)
+#   if fl_obj: ...
+#
+#   This looked up a SINGLE object literally named "F0 Ground Floor".
+#   Every other floor-coloring function in this project (live_agent_
+#   runner.py's _update_floor_colours(), animation_baker.py's bake
+#   script) colors a floor by iterating every mesh INSIDE a collection
+#   (FLOOR_COLLECTIONS maps floor name -> "IfcBuildingStorey/F0 Ground
+#   Floor" etc.) — a floor is dozens of separate wall/slab/ceiling
+#   objects, not one object named after the floor. bpy.data.objects.
+#   get("F0 Ground Floor") returned None every time, so `if fl_obj:`
+#   was always False and this entire block silently did nothing — if
+#   evacuation_mode ever genuinely triggered, the board text would
+#   correctly say "Status: CRITICAL - EVACUATING" but the floors
+#   themselves would never actually turn red. Now uses the same
+#   collection-based approach as every other floor-coloring function
+#   in the project, so it's consistent and actually works.
+#
+#   Also hardened the text embed against a literal ''' inside an
+#   agent_message prematurely closing the generated Blender code's
+#   triple-quoted string.
 
 from bim.ifc_bridge import send_to_blender
 
 _MAX_LINE = 45   # hard character limit per line
+
+# Same collection mapping used by live_agent_runner.py and
+# animation_baker.py — kept identical so all three stay consistent.
+FLOOR_COLLECTIONS = {
+    "F0 Ground Floor": "IfcBuildingStorey/F0 Ground Floor",
+    "F1 First Floor" : "IfcBuildingStorey/F1 First Floor",
+    "F2 Second Floor": "IfcBuildingStorey/F2 Second Floor",
+    "F3 Third Floor" : "IfcBuildingStorey/F3 Third Floor",
+}
+
+SKIP_PREFIXES = (
+    'IfcFurnishing', 'IfcBuildingElementProxy', 'IfcFlowTerminal',
+    'IfcSanitaryTerminal', 'IfcLightFixture', 'IfcAlarm', 'IfcSign',
+    'IfcDoor', 'IfcWindow',
+)
 
 
 def _truncate(text: str) -> str:
@@ -44,7 +84,7 @@ for area in bpy.context.screen.areas:
 def update_board(snapshot: dict, agent_message: str = "") -> dict:
     """
     Updates the board with current occupancy state and agent directive.
-    Turns all floor objects RED if evacuation_mode is active.
+    Turns every floor collection RED if evacuation_mode is active.
     """
     by_floor   = snapshot.get("by_floor", {})
     alerts     = snapshot.get("alerts", [])
@@ -110,8 +150,18 @@ def update_board(snapshot: dict, agent_message: str = "") -> dict:
         for dl in directive_lines:
             lines.append(_truncate(dl))
 
-    # Join and sanitise for embedding in Python f-string
-    text = "\n".join(lines).replace('"', "'").replace("\\", "")
+    # Join and sanitise for embedding in Python f-string.
+    # Also strip any literal ''' so a stray one inside agent_message
+    # can't prematurely close the generated code's triple-quoted string.
+    text = (
+        "\n".join(lines)
+        .replace('"', "'")
+        .replace("\\", "")
+        .replace("'''", "'")
+    )
+
+    floor_collections_json = str(FLOOR_COLLECTIONS)
+    skip_prefixes_json     = str(SKIP_PREFIXES)
 
     code = f"""
 import bpy
@@ -121,8 +171,16 @@ b = bpy.data.objects.get('FireSafetyBoard')
 if b:
     b.data.body = '''{text}'''
 
-# If Escalation / Evacuation mode is active, set all floor objects to RED material
+# If Escalation / Evacuation mode is active, colour every floor
+# collection RED — iterates the actual mesh objects inside each
+# floor's IFC storey collection, same approach as every other
+# floor-coloring function in this project. The previous version
+# looked up a single object named after the floor, which never
+# existed, so this was a silent no-op.
 if {str(evac_mode)}:
+    FLOOR_COLLECTIONS = {floor_collections_json}
+    SKIP = {skip_prefixes_json}
+
     red_mat = bpy.data.materials.get('EvacRedMaterial')
     if not red_mat:
         red_mat = bpy.data.materials.new('EvacRedMaterial')
@@ -135,14 +193,21 @@ if {str(evac_mode)}:
             if 'Emission Strength' in bsdf.inputs:
                 bsdf.inputs['Emission Strength'].default_value = 1.5
 
-    floor_names = ['F0 Ground Floor', 'F1 First Floor', 'F2 Second Floor', 'F3 Third Floor']
-    for fl_name in floor_names:
-        fl_obj = bpy.data.objects.get(fl_name)
-        if fl_obj:
-            if fl_obj.data.materials:
-                fl_obj.data.materials[0] = red_mat
-            else:
-                fl_obj.data.materials.append(red_mat)
+    coloured = 0
+    for floor_name, col_name in FLOOR_COLLECTIONS.items():
+        col = bpy.data.collections.get(col_name)
+        if not col:
+            continue
+        for obj in col.objects:
+            if obj.type != 'MESH':
+                continue
+            if any(obj.name.startswith(p) for p in SKIP):
+                continue
+            if obj.data:
+                obj.data.materials.clear()
+                obj.data.materials.append(red_mat)
+                coloured += 1
+    print(f'Evacuation mode: coloured {{coloured}} objects RED across all floors')
 
 for area in bpy.context.screen.areas:
     if area.type == 'VIEW_3D': area.tag_redraw()

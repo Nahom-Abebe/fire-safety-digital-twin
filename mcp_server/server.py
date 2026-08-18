@@ -1,8 +1,13 @@
 # mcp_server/server.py
-# FastMCP server — the interoperability layer .
+# FastMCP server — the interoperability layer (Section 3.4 of report).
 # Exposes 9 typed tools covering Sense, Reason and Act operations.
+#
+# Fix applied: removed module-level initialise_occupants() and create_board()
+# calls. These were firing on every import, resetting the simulation state
+# to 80 occupants/seed=42 even when test_scenarios.py had already
+# initialised with different parameters (e.g. TS-05 with 40 occupants).
 # Each calling script (live_agent_runner, test_scenarios, phase2_runner)
-# owns its own initialisation.
+# now owns its own initialisation.
 #
 # Run standalone: python -m mcp_server.server
 
@@ -16,7 +21,7 @@ from sensors.sensor_sim import (
     get_room_status, update_sign_status, set_room_attractiveness,
     trigger_event, clear_event
 )
-from sensors.building_graph import get_max_occupancy, get_exit_path
+from sensors.building_graph import BUILDING_GRAPH, get_max_occupancy, get_exit_path
 from rag.retriever import retrieve_regulations, get_adb_context
 from bim.bim_query import (
     get_all_signs, get_sign, check_occupancy_compliance
@@ -126,7 +131,21 @@ def get_adb_violation_context(room_label: str,
     for Section 2.33, Clause 2.43, and Table 2.1.
     Use when you need a specific ADB citation for a sign update.
     """
-    return get_adb_context(room_label, "room", current, max_occ)
+    # Was hardcoded to "room" regardless of the violation's actual
+    # location — meaning a corridor or stairwell violation still
+    # retrieved bedroom-occupancy-oriented passages (Clause 2.43)
+    # instead of the correct horizontal-escape/travel-distance
+    # passages (Table 2.1), directly undermining retriever.py's
+    # room-type-aware query selection. The agent has no reliable way
+    # to supply the correct type itself — get_room_status() (what
+    # sense_room returns) doesn't expose node_type at all — so it's
+    # derived here directly from the graph, which already tracks it
+    # correctly for every node.
+    node = next((n for n, d in BUILDING_GRAPH.nodes(data=True)
+                if d["label"] == room_label), None)
+    room_type = BUILDING_GRAPH.nodes[node]["node_type"] if node is not None else "room"
+
+    return get_adb_context(room_label, room_type, current, max_occ)
 
 
 # ════════════════════════════════════════════════════════════════════════════
