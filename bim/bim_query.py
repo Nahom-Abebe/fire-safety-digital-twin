@@ -106,6 +106,36 @@ def get_space_by_name(long_name: str) -> dict:
     return {"error": f"'{long_name}' not found"}
 
 
+def get_adb_ref_for_room_label(graph_label: str) -> str:
+    """
+    Given a graph label (e.g. '3-1', '1-2'), returns the correct
+    room-type-aware ADB reference — the same classification
+    _adb_ref_for_space() already applies, just resolved via
+    GRAPH_TO_IFC instead of requiring a caller to already have a
+    SPACES dict entry in hand.
+
+    Added for animation_baker.py's _build_board_text(), which
+    previously hardcoded "(ADB Cl.2.43)" — the bedroom clause — next
+    to every room in the OVERCAPACITY list regardless of what that
+    room actually was. That's specifically visible in TS-02, whose
+    violation_room is a real bedroom but whose scenario is otherwise
+    about exit obstruction/travel distance — citing the bedroom
+    clause there isn't wrong for that specific room, but the board
+    had no way to cite anything else correctly if a future scenario's
+    violation_room were a non-bedroom space. Falls back to
+    GENERIC_ADB_REF (via _adb_ref_for_space()'s own fallback) for any
+    label not in GRAPH_TO_IFC or with no matching real space.
+    """
+    from bim.room_geometry import GRAPH_TO_IFC
+    ifc_name = GRAPH_TO_IFC.get(graph_label)
+    if not ifc_name:
+        return GENERIC_ADB_REF
+    space = next((s for s in SPACES.values() if s.get("name") == ifc_name), None)
+    if space is None:
+        return GENERIC_ADB_REF
+    return _adb_ref_for_space(space)
+
+
 def get_all_signs() -> list:
     return list(SIGNS.values())
 

@@ -1,5 +1,15 @@
 # bim/animation_baker.py
 # Bakes per-agent occupancy management timeline into Blender keyframes.
+#
+# Updates applied:
+#   - bake_animation() accepts blocked_exits, multi_violations, mobility_node
+#   - All three are forwarded to simulate_agent_timeline()
+#   - mobility_marker_id extracted from timeline and used to colour the
+#     wheelchair cone distinctly (purple) in the baked keyframes
+#   - Baseline guard: violation_room=None suppresses IFC write + sign update
+#   - ADB removed from physical sign messages (board only)
+#   - _build_floor_colour_timeline handles None violation_room cleanly
+#   - _build_sign_states_timeline produces clean occupant-facing text
 
 import json, os, random
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -329,8 +339,23 @@ def _build_board_text(snap: dict, violation,
         if over_rooms:
             lines.append(f"OVERCAPACITY ({len(over_rooms)}):")
             for a in over_rooms[:3]:
-                lines.append(f"  {a['label']}: {a['current']}/{a['max']}"
-                             f" (ADB Cl.2.43)")
+                # Room-type-aware ADB citation — was hardcoded
+                # "(ADB Cl.2.43)" (the bedroom clause) for every room
+                # here regardless of what it actually was. See
+                # bim_query.get_adb_ref_for_room_label() docstring.
+                # The real references are longer than that old fixed
+                # string (e.g. the Lounge one alone is 65 chars) — no
+                # width limit existed on this board text at all before
+                # now, so a long reference would overflow the physical
+                # board unread, same 45-char convention bim/board.py
+                # already uses elsewhere in the project.
+                from bim.bim_query import get_adb_ref_for_room_label
+                adb_ref = get_adb_ref_for_room_label(a["label"])
+                line = (f"  {a['label']}: {a['current']}/{a['max']}"
+                       f" ({adb_ref})")
+                if len(line) > 45:
+                    line = line[:42] + "..."
+                lines.append(line)
         else:
             lines.append(f"Monitoring: {violation_room}")
             lines.append("Status: Occupancy within limits")
@@ -538,9 +563,23 @@ def bake_animation(total_occupants: int = 80,
         print("  Baseline scenario — IFC Pset write suppressed")
         print("  Corridor sign updates suppressed")
     else:
-        print(f"  Writing ComplianceStatus=FAIL to IFC for {violation_room}...")
-        pset_result = _write_compliance_pset(violation_room)
-        print(f"  Pset result: {pset_result.get('status', pset_result)}")
+        # Fixed: this only ever wrote the PRIMARY violation_room's
+        # ComplianceStatus to the IFC file. For a multi-violation
+        # scenario like TS-03, additional rooms (multi_violations)
+        # were correctly flagged in the live simulation — the board
+        # and signs reflect them — but never got their own IFC Pset
+        # write at all. The IFC record would silently omit them even
+        # though the console log and viewport both show them as
+        # genuine violations. Now writes once per violating room.
+        all_violation_rooms = [violation_room] + [
+            mv["room"] for mv in (multi_violations or [])
+        ]
+        pset_results = {}
+        for room in all_violation_rooms:
+            print(f"  Writing ComplianceStatus=FAIL to IFC for {room}...")
+            result = _write_compliance_pset(room)
+            pset_results[room] = result
+            print(f"    Pset result: {result.get('status', result)}")
 
     total_frames = total_ticks * frames_per_tick
 
