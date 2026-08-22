@@ -144,6 +144,20 @@ def _resolve_occupant_rooms_from_blender(centroids: dict) -> dict:
     them or whether any tick-driving script has run at all since a
     one-time static phase1_setup.py placement — so that's the source
     of truth used here.
+
+    Fix applied: this previously compared X/Y position only, ignoring
+    height (Z) entirely. Every floor stacks directly on top of the
+    one below at nearly the same room-layout footprint, so a cone
+    genuinely on F2 or F3 could match an F1 room's centroid just
+    because it happened to be closer (or tied) in a flat 2D
+    comparison — floor identity was never actually part of the
+    calculation. This is exactly what caused the wheelchair user to
+    consistently end up routed to F1 regardless of which floor they
+    actually started on: whatever tie-breaking fell out of dict
+    iteration order produced the same wrong floor every time, not a
+    random one. Real floor separation is 3m (F0=0.0, F1=3.0, F2=6.0,
+    F3=9.0), far larger than any jitter noise, so including Z in the
+    distance calculation makes floor identification unambiguous.
     """
     import bpy
 
@@ -153,12 +167,31 @@ def _resolve_occupant_rooms_from_blender(centroids: dict) -> dict:
     for obj in bpy.data.objects:
         if not obj.name.startswith("Occupant_"):
             continue
+        # Skip any cone already marked evacuated/at-refuge by a
+        # previous ESCALATE press — see animate_evacuation_via_paths()
+        # for where this flag gets set, and _reset() in
+        # manager_panel.py for where it gets cleared. Without this,
+        # pressing ESCALATE a second time recomputed a path for every
+        # cone including ones already standing outside at the
+        # assembly point — since this function only knows about ROOM
+        # centroids, an already-evacuated cone's position got matched
+        # to whatever real room was geometrically nearest to the
+        # assembly point, and the resulting path walked it back INTO
+        # the building before re-evacuating.
+        if obj.get("fs_evacuated", False):
+            continue
+
         mid = obj.name.split("_", 1)[1]
-        x, y = obj.location.x, obj.location.y
+        x, y, z = obj.location.x, obj.location.y, obj.location.z
 
         best_label, best_dist = None, None
         for label, c in label_positions:
-            d = (c["x"] - x) ** 2 + (c["y"] - y) ** 2
+            # Full 3D distance, not just X/Y — see fix note above.
+            # Centroid z is stored at floor level; cones sit at
+            # z + 0.85 (person-height offset, same convention
+            # occupant_markers.py uses when placing them).
+            d = ((c["x"] - x) ** 2 + (c["y"] - y) ** 2
+                 + ((c["z"] + 0.85) - z) ** 2)
             if best_dist is None or d < best_dist:
                 best_dist, best_label = d, label
 
@@ -416,6 +449,13 @@ def _evac_step():
         dist = math.sqrt(dx*dx + dy*dy + dz*dz)
         if dist < THRESH:
             wp_index[mid] = idx + 1
+            if wp_index[mid] >= len(waypoints):
+                # This specific cone has just reached its own final
+                # waypoint (assembly point, or refuge for a wheelchair
+                # cone) — mark it so a later ESCALATE press skips it
+                # entirely instead of recomputing a path that would
+                # walk it back into the building. Cleared by _reset().
+                obj["fs_evacuated"] = True
         else:
             factor = min(SPEED / dist, 1.0)
             obj.location.x += dx * factor
