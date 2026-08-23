@@ -570,6 +570,7 @@ def main(scenario: str = "default",
         multi_violations = sc.get("multi_violations", []),
         mobility_node    = effective_mobility_node,
         mobility_refuge  = mobility_refuge,
+        scenario_adb_ref = sc.get("adb_ref") if not baseline else None,
     )
 
     if result.get("status") != "ok":
@@ -605,8 +606,11 @@ def main(scenario: str = "default",
     if not baseline and sc.get("extra_sign_kind"):
         print(f"\nComputing reactive extra-sign schedule "
               f"({sc['extra_sign_kind']})...")
+        print("  [re-simulating with identical seed/params to verify "
+              "against the real bake above — not a second bake]")
         extra_schedule = _build_extra_sign_schedule(
             sc, total_occupants, effective_mobility_node, mobility_refuge)
+        print("  [re-simulation complete — schedule extracted]")
 
     _jump_to_frame(0)
     _drive_animation(total, frames_per_tick, frame_delay, extra_schedule)

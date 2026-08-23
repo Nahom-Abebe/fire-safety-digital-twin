@@ -313,8 +313,38 @@ def _build_sign_states_timeline(timeline: list,
 
 
 def _build_board_text(snap: dict, violation,
-                       violation_room) -> str:
-    """Board text — ADB citations go here, not on physical signs."""
+                       violation_room, scripted_rooms: set = None,
+                       scenario_adb_ref: str = None,
+                       in_monitor_window: bool = False) -> str:
+    """
+    Board text — ADB citations go here, not on physical signs.
+
+    scripted_rooms / scenario_adb_ref: the room-type classifier
+    (get_adb_ref_for_room_label) is mechanically correct but knows
+    nothing about a scenario's actual narrative — TS-02 is genuinely
+    about exit obstruction (Table 2.1), TS-04 about wheelchair refuge
+    (Sections 3.5-3.6), yet both scenarios' scripted violation_room
+    happens to be a real bedroom, so the classifier alone would always
+    show the bedroom citation regardless of what the scenario is
+    actually demonstrating. For any room in scripted_rooms (the
+    scenario's own violation_room + multi_violations), the scenario's
+    own intended clause is used instead. Any OTHER room that happens
+    to alert incidentally still gets the honest, room-type-derived
+    citation — only the scenario's own scripted point overrides.
+
+    in_monitor_window: previously the OVERCAPACITY block (and its
+    citation) only appeared while a room's occupancy was LITERALLY
+    over max_occ at that exact tick — but lowering a violating room's
+    attractiveness is the actual intervention, so occupancy naturally
+    drops back under the limit within a few ticks BY DESIGN. That
+    meant the citation flashed briefly then vanished, well before a
+    viewer could read it. The scenario's own scripted room(s) now stay
+    visible with their citation for the same MONITOR_TICKS window
+    bake_animation() already uses for cone colouring — but labelled
+    honestly: still "OVER" if genuinely still over, "RESOLVING" if the
+    room has already dropped back into compliance within the window.
+    The board never claims a room is currently over when it isn't.
+    """
     lines = [
         "FIRE SAFETY DIGITAL TWIN",
         f"Tick: {snap['tick']}",
@@ -334,34 +364,66 @@ def _build_board_text(snap: dict, violation,
 
     lines.append("")
 
-    if violation and snap.get("alerts"):
-        over_rooms = [a for a in snap["alerts"] if a["severity"] == "OVER"]
-        if over_rooms:
+    if violation:
+        over_rooms  = [a for a in snap.get("alerts", []) if a["severity"] == "OVER"]
+        over_labels = {a["label"] for a in over_rooms}
+
+        # Build the display list: genuinely-over rooms as before, plus
+        # any scripted room that's already resolved but still within
+        # the monitor window — labelled RESOLVING, not OVER, since it
+        # honestly isn't over capacity anymore. See docstring.
+        display_entries = [(a, "OVER") for a in over_rooms]
+        if in_monitor_window and scripted_rooms:
+            for room_label in scripted_rooms:
+                if room_label in over_labels:
+                    continue   # already included above, still genuinely over
+                current = snap.get("occupancy", {}).get(room_label, 0)
+                node = next((n for n, d in BUILDING_GRAPH.nodes(data=True)
+                            if d["label"] == room_label), None)
+                if node is None:
+                    continue
+                max_occ = get_max_occupancy(node)
+                display_entries.append((
+                    {"label": room_label, "current": current, "max": max_occ},
+                    "RESOLVING"
+                ))
+
+        # Scripted-scenario room(s) always shown FIRST. Bedrooms make
+        # up 36 of the 44 alert-relevant rooms (82%) — with 80
+        # occupants wandering ~80 rooms, an incidental bedroom hitting
+        # 4+ is common by pure chance, unrelated to this scenario's
+        # actual point. Without this, an incidental bedroom alert
+        # (Clause 2.43) could sit ahead of or beside the scenario's
+        # OWN specific citation (e.g. TS-02's Table 2.1), making the
+        # board look like it "always" cites 2.43 even when the
+        # scenario-specific fix is working correctly underneath.
+        def _is_scripted(entry):
+            a, _ = entry
+            return bool(scripted_rooms) and a["label"] in scripted_rooms
+        display_entries.sort(key=lambda e: 0 if _is_scripted(e) else 1)
+
+        if display_entries:
             lines.append(f"OVERCAPACITY ({len(over_rooms)}):")
-            for a in over_rooms[:3]:
-                # Room-type-aware ADB citation — was hardcoded
-                # "(ADB Cl.2.43)" (the bedroom clause) for every room
-                # here regardless of what it actually was. See
-                # bim_query.get_adb_ref_for_room_label() docstring.
-                # The real references are longer than that old fixed
-                # string (e.g. the Lounge one alone is 65 chars) — no
-                # width limit existed on this board text at all before
-                # now, so a long reference would overflow the physical
-                # board unread, same 45-char convention bim/board.py
-                # already uses elsewhere in the project.
-                from bim.bim_query import get_adb_ref_for_room_label
-                adb_ref = get_adb_ref_for_room_label(a["label"])
-                line = (f"  {a['label']}: {a['current']}/{a['max']}"
-                       f" ({adb_ref})")
-                if len(line) > 45:
-                    line = line[:42] + "..."
-                lines.append(line)
+            for a, status in display_entries[:3]:
+                is_scripted = _is_scripted((a, status))
+                # Scenario's own intended clause wins for its scripted
+                # violation room(s); the room-type classifier is the
+                # honest fallback for any other, incidental alert.
+                # See _build_board_text() docstring.
+                if is_scripted and scenario_adb_ref:
+                    adb_ref = scenario_adb_ref
+                else:
+                    from bim.bim_query import get_adb_ref_for_room_label
+                    adb_ref = get_adb_ref_for_room_label(a["label"])
+                import textwrap
+                tag    = "" if status == "OVER" else f" [{status}]"
+                marker = "* " if is_scripted else "  "
+                lines.append(f"{marker}{a['label']}: {a['current']}/{a['max']}{tag}")
+                for wline in textwrap.wrap(adb_ref, width=41):
+                    lines.append(f"    {wline}")
         else:
             lines.append(f"Monitoring: {violation_room}")
             lines.append("Status: Occupancy within limits")
-    elif violation:
-        lines.append(f"Monitoring: {violation['node_label']}")
-        lines.append("Status: Redirecting occupants")
     else:
         lines.append("Status: NORMAL — all rooms compliant")
 
@@ -420,7 +482,8 @@ def bake_animation(total_occupants: int = 80,
                    blocked_exits: list = None,
                    multi_violations: list = None,
                    mobility_node: str = None,
-                   mobility_refuge: bool = False) -> dict:
+                   mobility_refuge: bool = False,
+                   scenario_adb_ref: str = None) -> dict:
     """
     Full occupancy management animation bake.
 
@@ -483,6 +546,25 @@ def bake_animation(total_occupants: int = 80,
 
     MONITOR_TICKS = 8
 
+    # Scripted violation rooms — this scenario's own violation_room
+    # plus any multi_violations rooms. Used by _build_board_text() to
+    # decide when the scenario's own intended clause (scenario_adb_ref)
+    # should override the generic room-type classifier — see that
+    # function's docstring.
+    scripted_rooms = set()
+    if not is_baseline and violation_room:
+        scripted_rooms.add(violation_room)
+    for mv in (multi_violations or []):
+        mv_room = mv.get("room")
+        if mv_room:
+            scripted_rooms.add(mv_room)
+
+    # Diagnostic — confirms exactly what reached this function, so a
+    # mismatch between the console's scenario summary and the actual
+    # board citation can be traced directly instead of guessed at.
+    print(f"  Board citation override: scripted_rooms={scripted_rooms}, "
+          f"scenario_adb_ref={scenario_adb_ref!r}")
+
     # ── Occupant marker keyframes ─────────────────────────────────────────
     print("  Building occupant keyframes...")
     marker_keys = {i: [] for i in range(total_occupants)}
@@ -532,7 +614,9 @@ def bake_animation(total_occupants: int = 80,
 
         board_texts.append(
             _build_board_text(record["snapshot"], violation,
-                              violation_room if not is_baseline else None))
+                              violation_room if not is_baseline else None,
+                              scripted_rooms, scenario_adb_ref,
+                              in_monitor_window))
 
     # ── Floor & sign timelines ────────────────────────────────────────────
     print("  Building floor colour & sign state keyframes...")

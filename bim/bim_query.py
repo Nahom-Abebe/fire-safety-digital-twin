@@ -68,15 +68,43 @@ except KeyError as e:
 # scenarios agree with each other. Extend the keyword lists once the
 # real long_name values in global_ids_v2.json are known — corridors,
 # stairs, and any other room types currently fall through to GENERIC.
+#
+# Communal room citation corrected: was "ADB Vol2 Table B1 — Purpose
+# Group 2a (communal space occupancy)" — Table B1 is the purpose-group
+# classification table, not an occupant-capacity source at all. The
+# actual correct basis, confirmed directly against the official ADB
+# Vol2 text (gov.uk): Appendix D gives the occupant-number calculation
+# methodology ("if the maximum number of people... is not known, it
+# should be calculated using the occupant number guidance in Appendix
+# D"), and Appendix C's Table C1 gives the floor-space factor the
+# calculation actually uses — 1.0 m2/person for exactly this category:
+# "committee room, common room, conference room, dining room... lounge
+# or bar... meeting room, reading room, restaurant". Lounge, Dining,
+# and Conference all share this one factor, so they share one
+# reference here. Bedroom is deliberately left unchanged — bedrooms
+# aren't in Table C1 at all (capacity there is governed by bed count
+# under Clause 2.43, not a density calculation). Bedroom's citation
+# is now worded to reflect that honestly: Clause 2.43 genuinely
+# governs bed provision, not a headcount density calculation — this
+# no longer implies the clause mathematically produces this room's
+# specific max_occ figure, only that it's the relevant ADB provision
+# while the numeric threshold itself is a modelled system parameter.
 GENERIC_ADB_REF  = "ADB Vol2 Table B1 — Purpose Group 2a"
+COMMUNAL_ADB_REF = ("ADB Vol2 Appendix D — occupant number calculation "
+                    "(Table C1 floor space factor: 1.0 m2/person)")
+BEDROOM_ADB_REF  = ("ADB Clause 2.43 (bed provision) — occupancy "
+                    "monitored against system-defined room capacity")
 ROOM_TYPE_ADB_REFS = {
-    "bedroom": "ADB Clause 2.43 — bedroom max occupancy care home",
-    "lounge" : "ADB Vol2 Table B1 — Purpose Group 2a "
-               "(communal space occupancy)",
+    "bedroom"   : BEDROOM_ADB_REF,
+    "lounge"    : COMMUNAL_ADB_REF,
+    "dining"    : COMMUNAL_ADB_REF,
+    "conference": COMMUNAL_ADB_REF,
 }
 ROOM_TYPE_KEYWORDS = {
-    "bedroom": ["bedroom", "bed room"],
-    "lounge" : ["lounge", "communal", "day room", "dayroom"],
+    "bedroom"   : ["bedroom", "bed room"],
+    "lounge"    : ["lounge", "communal", "day room", "dayroom"],
+    "dining"    : ["dining"],
+    "conference": ["conference", "meeting room"],
 }
 
 

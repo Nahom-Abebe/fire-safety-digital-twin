@@ -20,9 +20,28 @@
 #      simulation (a real decision to wait for staff rather than keep
 #      wandering) rather than continuing to be probabilistically nudged
 #      tick after tick, which previously let it drift away again.
+#
+# Fix applied — build_snapshot()'s alerts list previously checked EVERY
+# room-type node against get_max_occupancy() with no exclusions at all,
+# including Bath/W-C/Store rooms floored at max_occ=1. With 80 occupants
+# wandering ~80 rooms over 20-25 ticks, an incidental second visitor to
+# a 1-person Bath room is common by chance, not a genuine occupancy
+# problem — this was flagging many such rooms every run and turning
+# multiple floors red simultaneously, unrelated to the scenario's actual
+# scripted violation. Now uses is_occupancy_alert_relevant() (already
+# built and proven in sensors/building_graph.py for exactly this
+# purpose in sensor_sim.py) to scope alerts to genuine bedrooms and
+# communal rooms only. Safe with respect to every scripted scenario:
+# the violation_room/multi_violations mechanism below is completely
+# independent of this alerts list — it only ever sets attractiveness_map
+# directly on a tick match — and every scripted violation_room in every
+# current scenario (1-1, 3-1, 3-2, 3-10) is a genuine bedroom, so none
+# of them are affected by this exclusion.
 
 import random
-from sensors.building_graph import BUILDING_GRAPH, EXIT_IDS, get_max_occupancy
+from sensors.building_graph import (
+    BUILDING_GRAPH, EXIT_IDS, get_max_occupancy, is_occupancy_alert_relevant
+)
 
 G          = BUILDING_GRAPH
 ROOM_NODES = [n for n, d in G.nodes(data=True) if d["node_type"] == "room"]
@@ -173,6 +192,13 @@ def simulate_agent_timeline(total_occupants: int = 80,
         alerts = []
         for n, c in occ_count.items():
             if G.nodes[n]["node_type"] != "room":
+                continue
+            # Scoped to genuine bedrooms/communal rooms only — see
+            # module docstring fix note. Excludes non-occupiable rooms
+            # (Store/W-C/Storage) and single-occupant personal-care
+            # rooms (Bath/Women) from ever generating an alert here,
+            # same scoping already proven in sensor_sim.py.
+            if not is_occupancy_alert_relevant(n):
                 continue
             mx = get_max_occupancy(n)
             if c > mx:
