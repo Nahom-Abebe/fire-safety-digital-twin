@@ -262,7 +262,6 @@ def main():
     print("  Check Blender:")
     print("  - 80 cone markers across F0-F3")
     print("  - FireSafetyBoard text visible")
-    print("  - Lounge Pset_FireSafetyStatus.CurrentOccupancy = 15")
     if labels_ok:
         print("  - Yellow room labels at each door")
     else:
