@@ -1,25 +1,6 @@
 # bim/occupant_markers.py
 # Creates and repositions occupant cone markers in Blender.
 # Uses bmesh (not bpy.ops) to avoid operator context failures.
-#
-# Two reposition functions:
-#   reposition_markers()      — full round-trip with result file (phase 2 runner)
-#   live_reposition_markers() — fire-and-forget, no result file (live agent runner)
-#                               safe to call every tick without competing with
-#                               floor colour or Pset update calls
-#
-# Fix applied:
-#   create_markers() previously only removed objects named "Occupant_*"
-#   before recreating them. It never touched "WheelchairLabel" — a text
-#   object fix_and_bake.py's TS-04 run parents to a specific occupant
-#   cone. Since create_markers() deletes and recreates cones with the
-#   same names (new objects, not the same ones), any WheelchairLabel
-#   left over from an earlier TS-04 bake loses its parent and is left
-#   floating at whatever world position its old local offset resolves
-#   to — outside the building, detached from any cone. fix_and_bake.py
-#   already cleans this object up before its own runs; create_markers()
-#   is the actual "fresh start" point for the whole scene, so it now
-#   owns the same cleanup.
 
 import json, os, random
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -315,6 +296,22 @@ def live_reposition_markers(snapshot: dict) -> None:
     If a marker is missing (shouldn't happen after create_markers),
     it is skipped silently rather than triggering a recreation that
     could interfere with the result file channel.
+
+    Fix applied: this never checked the fs_evacuated custom property
+    that assembly_point.py's animate_evacuation_via_paths() sets on a
+    cone once it reaches its own final waypoint (assembly or refuge).
+    sensor_sim.py's occupancy simulation has no concept of "outside
+    the building" at all — it keeps distributing all 80 occupants
+    across the same 80 rooms regardless of what ESCALATE did visually
+    — so every call here was unconditionally snapping EVERY cone,
+    including ones correctly sitting at assembly, straight back
+    inside the moment the live loop's pause (see live_agent_runner.py)
+    lifted. Confirmed as the actual mechanism behind "cones go back
+    into the building from the assembly point." Now skips any cone
+    still marked evacuated, the same exclusion
+    compute_signage_aware_evacuation_paths() already applies when
+    computing NEW paths — this function just never got the same
+    treatment for ONGOING repositioning.
     """
     centroids = load_room_centroids()
     occupancy = snapshot.get("occupancy", {})
@@ -349,6 +346,8 @@ try:
         name = f'Occupant_{{mid:03d}}'
         obj  = bpy.data.objects.get(name)
         if obj:
+            if obj.get('fs_evacuated', False):
+                continue  # at assembly/refuge — leave it there
             obj.location = (x, y, z + 0.85)
             obj.color    = (r, g, b, a)
         # If marker missing, skip — do not recreate during live loop
@@ -357,4 +356,4 @@ except Exception as e:
 for area in bpy.context.screen.areas:
     if area.type == 'VIEW_3D': area.tag_redraw()
 """)
-    # Returns None immediately — no waiting
+   

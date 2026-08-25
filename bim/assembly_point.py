@@ -42,6 +42,24 @@ REDIRECT_COUNT = 5
 BIM_DIR          = os.path.dirname(os.path.abspath(__file__))
 EVAC_PATHS_FILE  = os.path.join(BIM_DIR, "_full_evac_paths.json").replace("\\", "/")
 
+# Presence of this file means "an ESCALATE evacuation is currently in
+# progress" — a signal readable across the process boundary, the same
+# way EVAC_PATHS_FILE already is. Written when _escalate() starts,
+# removed when evacuation completes AND when _reset() is pressed.
+#
+# Exists because manager_panel.py's ESCALATE runs inside Blender's own
+# process, entirely separate from any external script (fix_and_bake.py,
+# live_agent_runner.py) that might ALSO be actively sending cone
+# position updates to Blender at the same time. fix_and_bake.py's own
+# interference (baked keyframes) can be cleared directly from inside
+# Blender — but live_agent_runner.py's interference is an ONGOING
+# external process calling live_reposition_markers() every tick with
+# zero awareness evacuation is happening, and Blender-side code has no
+# way to reach into a separate running Python process and tell it to
+# stop. The external script has to check for and respect this flag
+# itself — see live_agent_runner.py's own tick loop for the read side.
+EVAC_ACTIVE_FLAG = os.path.join(BIM_DIR, "_evacuation_active.flag").replace("\\", "/")
+
 
 # ── Create assembly point marker ──────────────────────────────────────────────
 
@@ -399,10 +417,20 @@ def animate_evacuation_via_paths(paths: dict) -> None:
     the journey in the first few steps then barely moves for the
     rest, making the movement look nearly frozen. See module docstring.
 
+    Writes EVAC_ACTIVE_FLAG for the duration of the walk — a signal
+    live_agent_runner.py's own tick loop should check and respect
+    (skip live_reposition_markers() while it exists), since that loop
+    runs in a completely separate process with no other way to know
+    an evacuation is in progress. Removed once every cone reaches its
+    own final waypoint.
+
     paths: {marker_id_str: [[x,y,z], [x,y,z], ...]}
     """
     with open(EVAC_PATHS_FILE, "w", encoding="utf-8") as f:
         json.dump(paths, f)
+
+    with open(EVAC_ACTIVE_FLAG, "w", encoding="utf-8") as f:
+        f.write("1")
 
     ORANGE = [0.95, 0.55, 0.10, 1.0]
 
@@ -510,6 +538,14 @@ def _evac_step():
 
         for area in bpy.context.screen.areas:
             if area.type == 'VIEW_3D': area.tag_redraw()
+
+        import os as _os
+        try:
+            if _os.path.exists(r"{EVAC_ACTIVE_FLAG}"):
+                _os.remove(r"{EVAC_ACTIVE_FLAG}")
+        except Exception:
+            pass
+
         print(f'Building empty — {{coloured}} floor objects set GREEN '
               f'(signs unchanged, stay red until RESET)')
         return None

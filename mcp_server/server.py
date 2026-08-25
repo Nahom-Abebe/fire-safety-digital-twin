@@ -52,6 +52,12 @@ def sense_building_state() -> dict:
     - Compliance alerts (WARNING at 80-100%, OVER strictly above 100%)
     - Active events
     - Summary counts
+    - available_sign_ids: every real corridor sign ID that currently
+      exists. ALWAYS pick a sign_id from this list for act_update_sign
+      — do not guess a naming pattern (e.g. floors other than F0 have
+      no "_N"/"_S" suffix; guessing one fails silently and wastes a
+      full round trip discovering the real ID via list_signs
+      afterward, confirmed directly in a real session log).
     Call this FIRST in every Sense-Reason-Act cycle.
     """
     snap = get_sensor_snapshot()
@@ -63,6 +69,7 @@ def sense_building_state() -> dict:
                                if a["severity"] == "OVER"),
         "floors_affected": list({a["floor"] for a in snap["alerts"]}),
     }
+    snap["available_sign_ids"] = [s["name"] for s in get_all_signs()]
     return snap
 
 
@@ -73,8 +80,33 @@ def sense_room(room_label: str) -> dict:
     room_label: graph label e.g. '0-1', '0-A', '1-16'
     Includes: current/max occupancy, ratio, severity, exit path,
     attractiveness, sign_blocked, IFC long name.
+
+    If checking MORE THAN ONE room this cycle, use sense_rooms (plural)
+    instead — one round trip for every room, not one round trip each.
     """
     return get_room_status(room_label)
+
+
+@mcp.tool()
+def sense_rooms(room_labels: list) -> dict:
+    """
+    Returns detailed status for MULTIPLE rooms in a single call —
+    the batched equivalent of calling sense_room once per room.
+
+    Use this whenever more than one room needs checking in the same
+    cycle (e.g. several WARNING alerts from the same
+    sense_building_state call). Three sequential sense_room calls for
+    three alerted rooms means three full model round trips before any
+    reasoning can happen; one sense_rooms call covering all three
+    means one. Confirmed directly in a real session log: a 3-room
+    tick's cycle latency was dominated by exactly this kind of
+    avoidable serial tool dispatch.
+
+    room_labels: list of graph labels, e.g. ["2-7", "2-9", "3-3"]
+    Returns: {room_label: room_status_dict, ...} — same per-room shape
+    sense_room returns, keyed by the label you passed in.
+    """
+    return {label: get_room_status(label) for label in room_labels}
 
 
 @mcp.tool()
@@ -116,9 +148,37 @@ def check_compliance(room_long_name: str,
     Uses the actual max_occ value from the IFC file — no LLM estimation.
     Always call this before stating whether a room is compliant.
     room_long_name: IFC long name e.g. 'Lounge', 'Bedroom'
-    Returns: compliant (bool), status (PASS/FAIL), adb_ref
+    Returns: compliant (bool), status (PASS/WARNING/FAIL), adb_ref
+
+    If checking MORE THAN ONE room this cycle, use
+    check_compliance_batch instead — one round trip for every room,
+    not one round trip each.
     """
     return check_occupancy_compliance(room_long_name, current_occupancy)
+
+
+@mcp.tool()
+def check_compliance_batch(checks: list) -> list:
+    """
+    Runs check_compliance for MULTIPLE rooms in a single call — the
+    batched equivalent of calling check_compliance once per room.
+
+    Use this whenever more than one room needs a compliance check in
+    the same cycle. Confirmed directly in a real session log: a
+    3-room tick made three separate check_compliance round trips back
+    to back, each one a full model turn, when a single batched call
+    would have covered all three.
+
+    checks: list of {"room_long_name": str, "current_occupancy": int}
+        e.g. [{"room_long_name": "Bedroom", "current_occupancy": 3},
+              {"room_long_name": "Bedroom", "current_occupancy": 4}]
+    Returns: list of compliance result dicts, same order as checks,
+        same shape check_compliance returns for a single room.
+    """
+    return [
+        check_occupancy_compliance(c["room_long_name"], c["current_occupancy"])
+        for c in checks
+    ]
 
 
 @mcp.tool()

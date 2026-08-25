@@ -1,6 +1,14 @@
 # agent/tool_schemas.py
-# Anthropic API tool definitions for the 9 MCP server functions.
+# Anthropic API tool definitions for the MCP server functions.
 # These tell Claude what tools are available and how to call them.
+#
+# Fix applied: added sense_rooms and check_compliance_batch — batched
+# versions of sense_room and check_compliance. A real session log
+# showed a 3-room tick making 3 separate sense_room round trips and 3
+# separate check_compliance round trips back to back, each a full
+# model turn, directly inflating cycle latency (confirmed: one tick
+# took 28.394s). The system prompt now instructs the agent to prefer
+# these when more than one room needs checking in the same cycle.
 
 TOOLS = [
     {
@@ -8,7 +16,9 @@ TOOLS = [
         "description": (
             "Returns the full current building state: occupancy per room and floor, "
             "compliance alerts (WARNING at 80% capacity, OVER at 100%), active events, "
-            "and a summary. Call this FIRST in every Sense-Reason-Act cycle."
+            "a summary, and available_sign_ids (every real corridor sign ID that "
+            "currently exists — always pick from this list, never guess a naming "
+            "pattern). Call this FIRST in every Sense-Reason-Act cycle."
         ),
         "input_schema": {
             "type": "object", "properties": {}, "required": []
@@ -18,7 +28,9 @@ TOOLS = [
         "name": "sense_room",
         "description": (
             "Returns detailed status for a specific room including current/max occupancy, "
-            "ratio, severity, attractiveness, sign_blocked status, and exit path."
+            "ratio, severity, attractiveness, sign_blocked status, and exit path. "
+            "If checking more than one room this cycle, use sense_rooms (plural) instead — "
+            "one round trip for every room, not one round trip each."
         ),
         "input_schema": {
             "type": "object",
@@ -29,6 +41,26 @@ TOOLS = [
                 }
             },
             "required": ["room_label"]
+        }
+    },
+    {
+        "name": "sense_rooms",
+        "description": (
+            "Returns detailed status for MULTIPLE rooms in a single call — the batched "
+            "equivalent of calling sense_room once per room. ALWAYS use this instead of "
+            "several sense_room calls whenever more than one room needs checking in the "
+            "same cycle (e.g. several alerts from the same sense_building_state call)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "room_labels": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Graph labels to check, e.g. ['2-7', '2-9', '3-3']"
+                }
+            },
+            "required": ["room_labels"]
         }
     },
     {
@@ -69,7 +101,9 @@ TOOLS = [
         "name": "check_compliance",
         "description": (
             "DETERMINISTIC ADB compliance check using the IFC model's max_occ value. "
-            "Always call this for occupancy decisions — never estimate thresholds yourself."
+            "Always call this for occupancy decisions — never estimate thresholds yourself. "
+            "If checking more than one room this cycle, use check_compliance_batch instead — "
+            "one round trip for every room, not one round trip each."
         ),
         "input_schema": {
             "type": "object",
@@ -84,6 +118,43 @@ TOOLS = [
                 }
             },
             "required": ["room_long_name", "current_occupancy"]
+        }
+    },
+    {
+        "name": "check_compliance_batch",
+        "description": (
+            "Runs check_compliance for MULTIPLE rooms in a single call — the batched "
+            "equivalent of calling check_compliance once per room. ALWAYS use this instead "
+            "of several check_compliance calls whenever more than one room needs a "
+            "compliance check in the same cycle."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "checks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "room_long_name": {
+                                "type": "string",
+                                "description": "IFC long name e.g. 'Lounge', 'Bedroom'"
+                            },
+                            "current_occupancy": {
+                                "type": "integer",
+                                "description": "Current number of occupants"
+                            }
+                        },
+                        "required": ["room_long_name", "current_occupancy"]
+                    },
+                    "description": (
+                        "One entry per room to check, e.g. "
+                        "[{'room_long_name': 'Bedroom', 'current_occupancy': 3}, "
+                        "{'room_long_name': 'Bedroom', 'current_occupancy': 4}]"
+                    )
+                }
+            },
+            "required": ["checks"]
         }
     },
     {
@@ -116,14 +187,16 @@ TOOLS = [
         "description": (
             "Updates an evacuation sign in the IFC model AND feeds the new status "
             "back into the simulation (sign_blocked changes movement probabilities). "
-            "This is the primary bidirectional write-back tool."
+            "This is the primary bidirectional write-back tool. sign_id MUST be one of "
+            "the exact IDs from sense_building_state's available_sign_ids list — do not "
+            "guess a naming pattern, it will fail silently."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "sign_id": {
                     "type": "string",
-                    "description": "Sign name e.g. 'SIGN_F0_CORRIDOR_N'"
+                    "description": "Sign name — must be one of available_sign_ids, e.g. 'SIGN_F0_CORRIDOR_N'"
                 },
                 "message": {
                     "type": "string",
@@ -136,7 +209,7 @@ TOOLS = [
                 },
                 "adb_ref": {
                     "type": "string",
-                    "description": "ADB clause justifying this decision"
+                    "description": "ADB clause justifying this decision (for traceability)"
                 }
             },
             "required": ["sign_id", "message", "status"]

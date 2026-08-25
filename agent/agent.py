@@ -1,7 +1,7 @@
 # agent/agent.py
 # Claude Sense-Reason-Act agent for care home occupancy management.
 #
-# Design philosophy:
+# Design philosophy (aligned with Peter Lawrence's emails):
 #   - This is an OCCUPANCY MANAGEMENT system, not an evacuation system
 #   - The agent monitors room capacity tick by tick
 #   - When a room approaches or exceeds its ADB limit, the agent:
@@ -54,25 +54,47 @@ Call sense_building_state to get current occupancy across all rooms and floors.
 Look at the alerts list:
   - severity WARNING means a room is at 80-99% of its ADB capacity
   - severity OVER    means a room has exceeded its ADB capacity
+Note available_sign_ids in the response — every real corridor sign ID that
+currently exists. ALWAYS pick a sign_id from this list later. Never guess a
+naming pattern (floors other than F0 have no "_N"/"_S" suffix) — a guessed ID
+fails silently and wastes a full round trip discovering the real one via
+list_signs afterward.
 
 If there are no alerts, call act_update_board with message
 "All rooms within safe occupancy limits - no action required" and stop.
 
 REASON:
-For each alert, in priority order (OVER before WARNING):
+If there is more than one alert this cycle, batch your tool calls — use
+sense_rooms (all room labels in ONE call) instead of several sense_room
+calls, and check_compliance_batch (all checks in ONE call) instead of
+several check_compliance calls. Each separate call is a full model round
+trip; three separate sense_room calls for three alerted rooms triples
+that cost for no benefit over one sense_rooms call covering all three.
+Still reason about and prioritise each room individually (OVER before
+WARNING) — only the TOOL CALLS should batch, not the reasoning.
 
-Step 1: Call sense_room with the room's graph label to get its full details
-        including room type, current count, max count, and the IFC long name.
+Step 1: Call sense_room (single room) or sense_rooms (multiple rooms) to
+        get full details including room type, current count, max count,
+        and the IFC long name for every alerted room.
 
-Step 2: Call get_regulations with a query SPECIFICALLY about care home
-        occupancy for that room type. Use queries like:
+Step 2: Call get_regulations ONCE per cycle with a query SPECIFICALLY
+        about care home occupancy for the room type(s) involved. Use
+        queries like:
         - "residential care home bedroom occupancy ADB Section 2.43"
         - "residential care home corridor escape route Section 2.33"
         - "Purpose Group 2a travel distance Table 2.1 care home"
         Do NOT use generic queries. Always reference the care home context.
+        Only call it a SECOND time if this cycle genuinely involves two
+        clearly different room types needing two different clauses
+        (e.g. a bedroom AND a corridor in the same cycle) — each
+        get_regulations call is a full round trip, so do not make a
+        second, speculative, or near-duplicate query when one
+        well-chosen query already covers every room in this cycle.
 
-Step 3: Call check_compliance using the IFC long name (e.g. "Bedroom",
-        "Lounge") and current occupancy to get the deterministic ADB result.
+Step 3: Call check_compliance (single room) or check_compliance_batch
+        (multiple rooms) using the IFC long name (e.g. "Bedroom", "Lounge")
+        and current occupancy for every alerted room, to get the
+        deterministic ADB result — PASS, WARNING, or FAIL.
 
 Step 4: Identify the SPECIFIC clause that justifies your action, e.g.:
         "ADB Vol2 Section 2.33 - residential care home general provisions"
@@ -81,9 +103,11 @@ Step 4: Identify the SPECIFIC clause that justifies your action, e.g.:
         You MUST cite a specific section or clause, never just "ADB Vol2".
 
 ACT:
-For each genuine violation (check_compliance returns FAIL or WARNING):
+For each genuine violation (check_compliance / check_compliance_batch
+returns FAIL or WARNING):
 
 1. Call act_update_sign for the corridor sign serving that floor:
+   - sign_id MUST be one of the exact IDs from available_sign_ids — see SENSE
    - Message must state WHICH room is affected and WHY (citing ADB clause)
    - Example: "Room 1-16 (Bedroom) at capacity per ADB Cl.2.43 - use alt route"
    - Status: "BLOCKED" for OVER capacity, "ALTERNATE" for WARNING
@@ -96,27 +120,51 @@ For each genuine violation (check_compliance returns FAIL or WARNING):
    EXACTLY this format. No markdown. No headers. No bullet points.
    No asterisks. No emoji. Plain text only. Exactly 6 lines:
 
-   CYCLE: Tick {n} - {IDLE / VIOLATION / FALSE POSITIVE}
-   ROOMS: {label} ({current}/{max}) {PASS/FAIL}, {label} ({current}/{max}) {PASS/FAIL}
+   CYCLE: Tick {n} - {IDLE / VIOLATION / PRE-EMPTIVE / FALSE POSITIVE}
+   ROOMS: {label} ({current}/{max}) {PASS/WARNING/FAIL}, {label} ({current}/{max}) {PASS/WARNING/FAIL}
    ADB: {Section X.XX} - {one line description of clause}
    SIGNS: {SIGN_ID} -> {STATUS} | {SIGN_ID} -> {STATUS} | None
    ACTION: {one sentence - what was done}
    ESCALATE: {Yes - reason} or {No}
+
+   Choosing the CYCLE label — check_compliance/check_compliance_batch's
+   actual returned status decides this, not a guess at overall severity:
+     IDLE           : sense_building_state returned no alerts at all.
+     VIOLATION       : at least one room's check returned FAIL.
+     PRE-EMPTIVE     : no room returned FAIL, but at least one returned
+                       WARNING — this IS a genuine finding requiring
+                       action (Step 2's attractiveness 0.3, an
+                       ALTERNATE sign), not a false positive. A room
+                       genuinely at 80-100% of its real ADB capacity is
+                       real, actionable information, whether or not it
+                       has yet crossed into FAIL.
+     FALSE POSITIVE  : every alerted room's check returned PASS — the
+                       graph's alert did not survive the IFC model's
+                       own capacity definition at all, not even to
+                       WARNING level.
+   Do not default to FALSE POSITIVE just because no room reached FAIL —
+   check each room's actual returned status; WARNING is a real result,
+   not a softer way of saying PASS.
 
 CRITICAL RULES:
 1. NEVER use vague citations like "ADB Vol2 Table B1" - always give the
    specific section/clause/table number from the retrieved passage.
 2. NEVER trigger building-wide actions. Only act on the specific room
    or corridor that has exceeded or is approaching its limit.
-3. NEVER invent occupancy numbers. Always call sense_room or
-   sense_building_state first. Always call check_compliance before acting.
+3. NEVER invent occupancy numbers. Always call sense_room/sense_rooms or
+   sense_building_state first. Always call check_compliance/
+   check_compliance_batch before acting.
 4. If check_compliance returns PASS (the IFC model says the room is fine
    even though the graph flagged it), do NOT update any signs for that room.
    Explain in the board directive that the graph-level alert was a false
-   positive against the IFC model's capacity definition.
-5. Rooms with PASS status are the most important finding - they show the
-   system is correctly filtering raw simulation data against authoritative
-   IFC building information.
+   positive against the IFC model's capacity definition. If it returns
+   WARNING, this is NOT a false positive — take the Step 2 pre-emptive
+   action and use the PRE-EMPTIVE cycle label, even if no other room in
+   the same cycle reached FAIL.
+5. A room's ACTUAL check_compliance status (PASS, WARNING, or FAIL) is
+   the most important finding — report it exactly as returned. Do not
+   round WARNING down to PASS, and do not let a cycle containing a mix
+   of statuses collapse into a single label that only reflects one of them.
 """
 
 
@@ -131,8 +179,9 @@ def _call_tool(tool_name: str, tool_input: dict,
     snapshot: current building state for board updates (optional)
     """
     from mcp_server.server import (
-        sense_building_state, sense_room, advance_tick,
-        get_regulations, check_compliance, get_adb_violation_context,
+        sense_building_state, sense_room, sense_rooms, advance_tick,
+        get_regulations, check_compliance, check_compliance_batch,
+        get_adb_violation_context,
         act_update_sign, act_update_board, act_set_room_attractiveness,
         list_signs,
     )
@@ -141,6 +190,8 @@ def _call_tool(tool_name: str, tool_input: dict,
         "sense_building_state"     : lambda i: sense_building_state(),
         "sense_room"               : lambda i: sense_room(
                                          i["room_label"]),
+        "sense_rooms"              : lambda i: sense_rooms(
+                                         i["room_labels"]),
         "advance_tick"             : lambda i: advance_tick(),
         "get_regulations"          : lambda i: get_regulations(
                                          i["query"],
@@ -148,6 +199,8 @@ def _call_tool(tool_name: str, tool_input: dict,
         "check_compliance"         : lambda i: check_compliance(
                                          i["room_long_name"],
                                          i["current_occupancy"]),
+        "check_compliance_batch"   : lambda i: check_compliance_batch(
+                                         i["checks"]),
         "get_adb_violation_context": lambda i: get_adb_violation_context(
                                          i["room_label"],
                                          i["current"],
@@ -183,7 +236,7 @@ def _call_tool(tool_name: str, tool_input: dict,
                 _board(snapshot,
                        f"REASONING: Retrieving ADB regulation\n"
                        f"Query: {query}...\n"
-                       f"Searching 1297 ADB Vol2 chunks")
+                       f"Searching ADB Vol2 knowledge base")
 
             elif tool_name == "check_compliance":
                 room   = tool_input.get("room_long_name", "")
@@ -192,11 +245,30 @@ def _call_tool(tool_name: str, tool_input: dict,
                 max_v  = "?"
                 if isinstance(result, dict):
                     status = result.get("status", "unknown")
-                    max_v  = result.get("max_occ", "?")
+                    # Fix applied: check_occupancy_compliance() returns
+                    # its capacity value under the key "max", not
+                    # "max_occ" — this line was looking for a key that
+                    # never existed in the dict, so it fell through to
+                    # the "?" default on every single call, regardless
+                    # of the room's real capacity. Confirmed directly
+                    # in a real live_agent_runner.py session: "IFC Max:
+                    # ?" appeared on every compliance-check board
+                    # update without exception.
+                    max_v  = result.get("max", "?")
                 _board(snapshot,
                        f"COMPLIANCE CHECK: {room}\n"
                        f"Occupancy: {occ} | IFC Max: {max_v}\n"
                        f"Result: {status.upper()}")
+
+            elif tool_name == "check_compliance_batch":
+                checks = tool_input.get("checks", [])
+                lines  = [f"COMPLIANCE CHECK ({len(checks)} rooms):"]
+                if isinstance(result, list):
+                    for c, r in zip(checks, result):
+                        room   = c.get("room_long_name", "")
+                        status = r.get("status", "unknown") if isinstance(r, dict) else "unknown"
+                        lines.append(f"  {room}: {status.upper()}")
+                _board(snapshot, "\n".join(lines[:5]))
 
             elif tool_name == "act_update_sign":
                 sign   = tool_input.get("sign_id", "")
@@ -282,8 +354,23 @@ def run_agent_cycle(client: anthropic.Anthropic,
                 if hasattr(b, "text"))
             latency = round(time.time() - start_time, 3)
 
+            # Fix applied: this counted every act_update_sign CALL,
+            # not every successful one — a call with a bad sign_id
+            # (confirmed in a real run: the agent tried
+            # "SIGN_F2_CORRIDOR_N", which doesn't exist; only F0 has
+            # an _N suffix) fails silently inside bim.signage.
+            # update_sign(), returning {"error": ...} with zero real
+            # effect, but still counted toward this total. trace now
+            # stores each call's actual result, so a failed call can
+            # be told apart from a genuine one — this number, and
+            # session_log["total_actions"] which it feeds into, now
+            # reflect real sign changes only.
             signs_updated = sum(
-                1 for t in trace if t["tool"] == "act_update_sign")
+                1 for t in trace
+                if t["tool"] == "act_update_sign"
+                and isinstance(t.get("result"), dict)
+                and "error" not in t["result"]
+            )
 
             # The actual structured board directive (CYCLE/ROOMS/ADB/
             # SIGNS/ACTION/ESCALATE) is posted as the agent_message
@@ -353,6 +440,7 @@ def run_agent_cycle(client: anthropic.Anthropic,
                     "tool"    : block.name,
                     "input"   : block.input,
                     "duration": call_time,
+                    "result"  : result,
                 })
 
                 tool_results.append({

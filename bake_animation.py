@@ -8,12 +8,6 @@
 #   - Physical corridor sign updates with clear occupant directions
 #   - Digital twin HUD board updates with ADB Cl.2.43 citations / escalation alerts
 #   - Occupants naturally disperse from overcrowded room
-#
-# Run: python bake_animation.py
-# Run: python bake_animation.py --scenario TS-01
-# Run: python bake_animation.py --scenario TS-01 --drive --fps 12 --speed 0.08
-# Run: python bake_animation.py --jump 60    (jump to violation frame)
-# Run: python bake_animation.py --play       (replay without rebaking)
 
 import sys, os, argparse, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -23,7 +17,6 @@ from bim.viewport_utils import frame_view_on_objects
 from bim.ifc_bridge import test_connection, send_to_blender
 
 # ── Synchronized Scenario Definitions ─────────────────────────────────────────
-# Aligned perfectly with tests/test_scenarios.py and bim/animation_baker.py
 
 SCENARIOS = {
     "default": {

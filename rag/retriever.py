@@ -85,7 +85,7 @@
 #      have any effect — a chunk with no "topics" metadata (from an
 #      older vector store) simply gets no boost, never an error.
 
-import os
+import os, json
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -105,7 +105,34 @@ _client     = None
 _collection = None
 _model      = None
 
-_REGULATION_CACHE = {}
+# In-memory cache — persists for one script run. Also loaded from and
+# written to disk (fix below) so a REPEATED run of live_agent_runner.py
+# (e.g. rehearsing a demo multiple times) can reuse ADB query results
+# computed by an EARLIER run, rather than every fresh process paying
+# the full embed+ChromaDB-query cost again for the exact same queries
+# — the in-memory cache alone only helped within a single run.
+_CACHE_FILE = os.path.join(os.path.dirname(__file__), "_query_cache.json")
+
+
+def _load_disk_cache() -> dict:
+    if os.path.exists(_CACHE_FILE):
+        try:
+            with open(_CACHE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_disk_cache():
+    try:
+        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_REGULATION_CACHE, f)
+    except Exception:
+        pass   # cache is a speed optimisation, never load-bearing
+
+
+_REGULATION_CACHE = _load_disk_cache()
 
 # Kept in sync with build_rag.py's _TOPIC_KEYWORDS — same six
 # categories, same keyword lists. Duplicated rather than imported
@@ -349,6 +376,7 @@ def retrieve_regulations(query: str, n: int = 3,
     passages = _dedup_and_rank(candidates, n, boost_topics=boost_topics)
 
     _REGULATION_CACHE[cache_key] = passages
+    _save_disk_cache()   # write-through, only reached on a genuine miss
     return passages
 
 

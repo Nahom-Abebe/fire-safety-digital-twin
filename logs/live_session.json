@@ -1,9 +1,9 @@
 {
   "config": {
     "total_ticks": 10,
-    "sense_every": 3,
+    "sense_every": 2,
     "total_occupants": 80,
-    "seed": 6
+    "seed": 54
   },
   "ticks": [
     {
@@ -16,14 +16,32 @@
     {
       "tick": 2,
       "total_occ": 80,
-      "warnings": 1,
-      "over": 0,
+      "warnings": 2,
+      "over": 2,
       "alerts": [
         {
-          "label": "3-14",
+          "label": "1-12",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
+        },
+        {
+          "label": "2-4",
+          "current": 4,
+          "max": 3,
+          "severity": "OVER"
+        },
+        {
+          "label": "2-9",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "3-6",
+          "current": 4,
+          "max": 3,
+          "severity": "OVER"
         }
       ]
     },
@@ -37,11 +55,23 @@
     {
       "tick": 4,
       "total_occ": 80,
-      "warnings": 1,
+      "warnings": 3,
       "over": 0,
       "alerts": [
         {
-          "label": "1-15",
+          "label": "1-10",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "2-10",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "3-2",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
@@ -51,32 +81,57 @@
     {
       "tick": 5,
       "total_occ": 80,
-      "warnings": 1,
+      "warnings": 0,
+      "over": 0,
+      "alerts": []
+    },
+    {
+      "tick": 6,
+      "total_occ": 80,
+      "warnings": 3,
       "over": 0,
       "alerts": [
         {
-          "label": "1-15",
+          "label": "1-6",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "2-7",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "3-5",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
         }
       ]
-    },
-    {
-      "tick": 6,
-      "total_occ": 80,
-      "warnings": 0,
-      "over": 0,
-      "alerts": []
     },
     {
       "tick": 7,
       "total_occ": 80,
-      "warnings": 1,
+      "warnings": 0,
+      "over": 0,
+      "alerts": []
+    },
+    {
+      "tick": 8,
+      "total_occ": 80,
+      "warnings": 2,
       "over": 0,
       "alerts": [
         {
-          "label": "1-2",
+          "label": "2-8",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "3-9",
           "current": 3,
           "max": 3,
           "severity": "WARNING"
@@ -84,70 +139,92 @@
       ]
     },
     {
-      "tick": 8,
+      "tick": 9,
       "total_occ": 80,
       "warnings": 0,
       "over": 0,
       "alerts": []
-    },
-    {
-      "tick": 9,
-      "total_occ": 80,
-      "warnings": 0,
-      "over": 1,
-      "alerts": [
-        {
-          "label": "1-1",
-          "current": 5,
-          "max": 4,
-          "severity": "OVER"
-        }
-      ]
     },
     {
       "tick": 10,
       "total_occ": 80,
-      "warnings": 0,
+      "warnings": 3,
       "over": 0,
-      "alerts": []
+      "alerts": [
+        {
+          "label": "1-11",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "2-3",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        },
+        {
+          "label": "3-1",
+          "current": 3,
+          "max": 3,
+          "severity": "WARNING"
+        }
+      ]
     }
   ],
   "agent_cycles": [
     {
-      "tick": 3,
-      "latency_seconds": 24.342,
-      "tool_count": 2,
-      "signs_updated": 0,
-      "adb_cited": false,
-      "directive": "**CYCLE COMPLETE - Tick 3**\n\nAll rooms and floors are within ADB safe occupancy limits. No violations detected. System idle. No sign updates or attractiveness adjustments required."
+      "tick": 2,
+      "latency_seconds": 50.336,
+      "tool_count": 13,
+      "signs_updated": 3,
+      "adb_cited": true,
+      "directive": "CYCLE: Tick 2 - VIOLATION\nROOMS: 1-12 (3/3) WARNING, 2-4 (4/3) FAIL, 2-9 (3/3) WARNING, 3-6 (4/3) FAIL\nADB: Section 2.43 - bedrooms shall not contain more than one single or double bed\nSIGNS: SIGN_F2_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F1_CORRIDOR -> ALTERNATE\nACTION: Blocked access to rooms 2-4 and 3-6 (FAIL); set attractiveness 0.3 for rooms 1-12 and 2-9 (WARNING)\nESCALATE: Yes - two bedrooms currently exceed maximum occupancy by one occupant each"
+    },
+    {
+      "tick": 4,
+      "latency_seconds": 18.858,
+      "tool_count": 11,
+      "signs_updated": 3,
+      "adb_cited": true,
+      "directive": "CYCLE: Tick 4 - PRE-EMPTIVE\nROOMS: 1-10 (3/3) WARNING, 2-10 (3/3) WARNING, 3-2 (3/3) WARNING\nADB: Clause 2.43 - bedroom occupancy at 100% system-defined capacity\nSIGNS: SIGN_F1_CORRIDOR -> ALTERNATE | SIGN_F2_CORRIDOR -> ALTERNATE | SIGN_F3_CORRIDOR -> ALTERNATE\nACTION: Reduced attractiveness to 0.3 on all three bedrooms; signage redirects occupants away\nESCALATE: No"
     },
     {
       "tick": 6,
-      "latency_seconds": 5.507,
-      "tool_count": 2,
-      "signs_updated": 0,
-      "adb_cited": false,
-      "directive": "CYCLE COMPLETE:\n- Status: System Idle - all rooms within safe occupancy limits\n- No violations detected\n- No signage updates required\n- Building operating within ADB compliance for residential care home occupancy management\n- Ready to monitor next tick"
+      "latency_seconds": 20.265,
+      "tool_count": 12,
+      "signs_updated": 3,
+      "adb_cited": true,
+      "directive": "CYCLE: Tick 6 - PRE-EMPTIVE\nROOMS: 1-6 (3/3) WARNING, 2-7 (3/3) WARNING, 3-5 (3/3) WARNING\nADB: Clause 2.43 - bedroom occupancy standard (max one bed per room)\nSIGNS: SIGN_F1_CORRIDOR -> ALTERNATE | SIGN_F2_CORRIDOR -> ALTERNATE | SIGN_F3_CORRIDOR -> ALTERNATE\nACTION: Reduced attractiveness to 0.3 and set corridor signs to ALTERNATE to discourage further occupancy of full-capacity bedrooms\nESCALATE: No"
     },
     {
-      "tick": 9,
-      "latency_seconds": 18.841,
-      "tool_count": 9,
-      "signs_updated": 1,
+      "tick": 8,
+      "latency_seconds": 20.237,
+      "tool_count": 11,
+      "signs_updated": 2,
       "adb_cited": true,
-      "directive": "**CYCLE SUMMARY - TICK 9**\n\nCYCLE: Tick 9 - VIOLATION\nROOMS: 1-1 (5/3) FAIL\nADB: Section 2.43 - bedrooms should not contain more than one single or double bed\nSIGNS: SIGN_F1_CORRIDOR -> BLOCKED\nACTION: Updated corridor sign and set room attractiveness to 0.0 to prevent further occupancy\nESCALATE: No\n\n---\n\n**Status:**\n\u2713 Room 1-1 over-capacity violation confirmed and actioned\n\u2713 Sign redirects occupants to other floors\n\u2713 Room attractiveness set to minimum to discourage entry\n\u2713 ADB Clause 2.43 compliance enforced via occupancy controls"
+      "directive": "CYCLE: Tick 8 - PRE-EMPTIVE\nROOMS: 2-8 (3/3) WARNING, 3-9 (3/3) WARNING\nADB: Clause 2.43 - bedrooms should not contain more than one bed per ADB Vol2 p.39\nSIGNS: SIGN_F2_CORRIDOR -> ALTERNATE | SIGN_F3_CORRIDOR -> ALTERNATE\nACTION: Set attractiveness to 0.3 on rooms 2-8 and 3-9; redirected occupant traffic via alternate route signage\nESCALATE: No"
+    },
+    {
+      "tick": 10,
+      "latency_seconds": 23.709,
+      "tool_count": 12,
+      "signs_updated": 3,
+      "adb_cited": true,
+      "directive": "CYCLE: Tick 10 - PRE-EMPTIVE\nROOMS: 1-11 (3/3) WARNING, 2-3 (3/3) WARNING, 3-1 (3/3) WARNING\nADB: Clause 2.43 - Bedrooms should not exceed one bed per room; all three at system-defined capacity\nSIGNS: SIGN_F1_CORRIDOR -> ALTERNATE | SIGN_F2_CORRIDOR -> ALTERNATE | SIGN_F3_CORRIDOR -> ALTERNATE\nACTION: Reduced attractiveness to 0.3 and posted alternate route guidance on all three floors\nESCALATE: No"
     }
   ],
-  "total_actions": 1,
+  "total_actions": 14,
   "rooms_managed": [
-    "1-1"
+    "3-6",
+    "2-4"
   ],
-  "start_time": "2026-08-12 18:43:55",
-  "end_time": "2026-08-12 18:45:12",
+  "start_time": "2026-08-25 14:54:49",
+  "end_time": "2026-08-25 14:57:32",
   "summary": {
-    "n_cycles": 3,
-    "mean_latency": 16.2,
-    "total_actions": 1,
-    "adb_cited": "1/3"
+    "n_cycles": 5,
+    "mean_latency": 26.7,
+    "total_actions": 14,
+    "adb_cited": "5/5"
   }
 }

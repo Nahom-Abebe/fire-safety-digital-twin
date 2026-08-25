@@ -245,6 +245,16 @@ def build():
     except Exception:
         pass
 
+    # Invalidate the disk-persisted query cache (rag/retriever.py) —
+    # its entries are query -> result pairs computed against the OLD
+    # chunk boundaries/embeddings/topic tags. Serving them after a
+    # rebuild would return stale, potentially wrong results with no
+    # indication anything changed.
+    cache_file = os.path.join("rag", "_query_cache.json")
+    if os.path.exists(cache_file):
+        os.remove(cache_file)
+        print("Cleared stale query cache (rag/_query_cache.json)")
+
     collection = client.create_collection(
         name=COLLECTION_NAME,
         metadata={"description": "UK Approved Document B Vol 2"}

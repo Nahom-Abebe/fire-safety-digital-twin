@@ -1,39 +1,4 @@
 # bim/bim_query.py
-#
-# Fixes applied:
-#   - check_occupancy_compliance() previously defaulted a missing
-#     max_occ to 0, meaning any space whose JSON entry lacked that
-#     field would report FAIL for any nonzero occupancy — indistin-
-#     guishable from a genuine violation. Now reports a distinct
-#     "no capacity data" state instead of silently treating "unknown"
-#     as "zero."
-#   - get_space_by_name() used s["long_name"] directly, so one space
-#     entry missing that key would crash the whole lookup with a
-#     KeyError instead of returning the function's own designed
-#     {"error": ...} response. Now uses .get() with a safe default.
-#   - The module-level JSON load now reports a clear, specific error
-#     if global_ids_v2.json is missing or malformed, instead of every
-#     importer crashing on a raw traceback before anything prints.
-#   - check_occupancy_compliance() no longer returns the same adb_ref
-#     for every space. _adb_ref_for_space() classifies the space by
-#     room type and returns the matching clause — the SAME clause
-#     text already used elsewhere in this project (fix_and_bake.py's
-#     scenario definitions, animation_baker.py's board text), so the
-#     live compliance check and the demo scenarios cite consistently
-#     rather than the live path always citing one generic reference.
-#
-#     Classification order:
-#       1. An explicit "room_type"/"category"/"use" field on the space
-#          dict, if global_ids_v2.json ever carries one — authoritative.
-#       2. Keyword matching against the space's long_name.
-#       3. Falls back to the generic Table B1 reference, same as before,
-#          for anything that doesn't match a known category.
-#
-#     The keyword list below only covers "lounge"/"bedroom" — the two
-#     room types confirmed to exist in this project's own scenario
-#     text. If global_ids_v2.json's actual long_name values differ
-#     (e.g. specific room names rather than "Bedroom"), extend
-#     ROOM_TYPE_KEYWORDS below to match them.
 
 import json, os
 
@@ -173,6 +138,24 @@ def get_sign(sign_id: str) -> dict:
 
 
 def check_occupancy_compliance(long_name: str, current: int) -> dict:
+    """
+    Fix applied: this was binary (current <= max -> PASS, else FAIL),
+    with no WARNING tier at all — meaning a room genuinely AT its real
+    capacity (current == max, e.g. 3/3) always returned PASS. Combined
+    with agent.py's system prompt instructing the agent to treat any
+    PASS result as a "false positive" against the graph's own alert,
+    this meant a real WARNING-severity alert from sensors/sensor_sim.py
+    (the 80-100% pre-emptive band Peter Lawrence's criterion 3 is
+    built around) could NEVER result in pre-emptive action — confirmed
+    directly in a real live_agent_runner.py run: every single at-
+    capacity room across the whole session was dismissed as a false
+    positive, and the only sign update that occurred was reactive
+    (a room that had already gone OVER), not pre-emptive. Now mirrors
+    the same 80% threshold sensor_sim.py's own alert logic already
+    uses, so the deterministic IFC-backed check and the graph's
+    alert severity agree with each other instead of one silently
+    overriding the other.
+    """
     space = get_space_by_name(long_name)
     if "error" in space:
         return space
@@ -189,11 +172,20 @@ def check_occupancy_compliance(long_name: str, current: int) -> dict:
         }
 
     max_occ = space["max_occ"]
+    ratio   = (current / max_occ) if max_occ > 0 else 0
+
+    if current > max_occ:
+        status, compliant = "FAIL", False
+    elif max_occ > 0 and ratio >= 0.8:
+        status, compliant = "WARNING", True
+    else:
+        status, compliant = "PASS", True
+
     return {
         "space": long_name, "floor": space.get("floor"),
         "current": current, "max": max_occ,
-        "compliant": current <= max_occ,
-        "status": "PASS" if current <= max_occ else "FAIL",
+        "compliant": compliant,
+        "status": status,
         "adb_ref": adb_ref,
     }
 
