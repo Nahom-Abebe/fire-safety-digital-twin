@@ -27,6 +27,7 @@ from bim.bim_query import (
     get_all_signs, get_sign, check_occupancy_compliance
 )
 from bim.signage import update_sign, reset_all_signs
+from bim.interior_signage import VISUAL_SIGN_IDS
 from bim.pset_sync import bulk_update_occupancy_psets
 from bim.board import create_board, update_board
 from bim.occupant_markers import create_markers, live_reposition_markers
@@ -52,12 +53,25 @@ def sense_building_state() -> dict:
     - Compliance alerts (WARNING at 80-100%, OVER strictly above 100%)
     - Active events
     - Summary counts
-    - available_sign_ids: every real corridor sign ID that currently
-      exists. ALWAYS pick a sign_id from this list for act_update_sign
+    - available_sign_ids: every sign ID with a real, visible Blender
+      panel. ALWAYS pick a sign_id from this list for act_update_sign
       — do not guess a naming pattern (e.g. floors other than F0 have
-      no "_N"/"_S" suffix; guessing one fails silently and wastes a
-      full round trip discovering the real ID via list_signs
-      afterward, confirmed directly in a real session log).
+      no "_N"/"_S" suffix), and never invent one that isn't listed
+      even if it fits the scenario's narrative (e.g. an exit-specific
+      sign) — see CRITICAL RULES.
+
+      Fix applied: this previously listed EVERY sign in
+      bim_query.SIGNS, loaded straight from global_ids_v2.json — the
+      full IFC-derived sign registry, a separate and LARGER set than
+      the 5 signs interior_signage.py actually renders a Blender
+      panel for. Confirmed directly: the agent picked
+      "SIGN_F0_EXIT_N"/"SIGN_F0_EXIT_S" from that full list — both
+      wrote successfully to their IFC Pset (a real, correctly-counted
+      success) but had no matching panel object to update, so nothing
+      changed on screen. Now scoped to
+      interior_signage.VISUAL_SIGN_IDS, the authoritative list of
+      signs that actually exist visually, so a "successful" call can
+      no longer be invisible.
     Call this FIRST in every Sense-Reason-Act cycle.
     """
     snap = get_sensor_snapshot()
@@ -69,7 +83,9 @@ def sense_building_state() -> dict:
                                if a["severity"] == "OVER"),
         "floors_affected": list({a["floor"] for a in snap["alerts"]}),
     }
-    snap["available_sign_ids"] = [s["name"] for s in get_all_signs()]
+    snap["available_sign_ids"] = [
+        s["name"] for s in get_all_signs() if s["name"] in VISUAL_SIGN_IDS
+    ]
     return snap
 
 
@@ -258,6 +274,10 @@ def act_set_room_attractiveness(room_label: str,
     This implements Peter Lawrence's 'relative attractiveness' concept.
     room_label: graph label e.g. '0-20', '1-A'
     value: 0.0 = avoid, 1.0 = neutral, 2.0 = attract
+
+    If setting attractiveness for MORE THAN ONE room this cycle, use
+    act_set_room_attractiveness_batch instead — one round trip for
+    every room, not one round trip each.
     """
     set_room_attractiveness(room_label, value)
     return {
@@ -270,13 +290,56 @@ def act_set_room_attractiveness(room_label: str,
 
 
 @mcp.tool()
+def act_set_room_attractiveness_batch(rooms: list) -> list:
+    """
+    Runs act_set_room_attractiveness for MULTIPLE rooms in a single
+    call — the batched equivalent of calling it once per room.
+
+    Use this whenever more than one room needs its attractiveness
+    adjusted in the same cycle (e.g. one FAIL room needing 0.0 and
+    several WARNING rooms needing 0.3 in the same ACT step).
+    Confirmed directly in a real session log: a single cycle made
+    four separate act_set_room_attractiveness calls back to back for
+    exactly this reason — one for the FAIL room, three for incidental
+    WARNING rooms named on the same board.
+
+    rooms: list of {"room_label": str, "value": float}
+        e.g. [{"room_label": "1-1", "value": 0.0},
+              {"room_label": "1-10", "value": 0.3}]
+    Returns: list of result dicts, same order as rooms, same shape
+        act_set_room_attractiveness returns for a single room.
+    """
+    results = []
+    for r in rooms:
+        room_label = r["room_label"]
+        value      = r["value"]
+        set_room_attractiveness(room_label, value)
+        results.append({
+            "room_label"    : room_label,
+            "attractiveness": value,
+            "effect"        : ("avoid"   if value < 0.5
+                               else "neutral" if value <= 1.2
+                               else "attract"),
+        })
+    return results
+
+
+@mcp.tool()
 def list_signs() -> list:
     """
-    Returns all evacuation signs with their current status and message.
-    Use this to understand which signs are already BLOCKED before
-    deciding which one to update.
+    Returns all evacuation signs with a real, visible Blender panel
+    and their current status and message. Use this to understand
+    which signs are already BLOCKED before deciding which one to
+    update.
+
+    Scoped to interior_signage.VISUAL_SIGN_IDS for the same reason
+    sense_building_state()'s available_sign_ids is — see that
+    docstring. Previously returned the full IFC-derived sign
+    registry, which could re-introduce a sign with no visual panel
+    even after the agent specifically called this to self-correct
+    from a bad guess.
     """
-    return get_all_signs()
+    return [s for s in get_all_signs() if s["name"] in VISUAL_SIGN_IDS]
 
 
 # ── Standalone server run ─────────────────────────────────────────────────────

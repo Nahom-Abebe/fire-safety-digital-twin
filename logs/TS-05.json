@@ -1,20 +1,27 @@
 {
   "scenario_id": "TS-05",
-  "latency_seconds": 23.501,
-  "tool_count": 4,
+  "latency_seconds": 16.415,
+  "api_turns": 6,
+  "api_time_seconds": 16.094,
+  "tool_time_seconds": 0.317,
+  "overhead_seconds": 0.004,
+  "tool_count": 5,
   "tools_used": [
     "sense_building_state",
     "sense_room",
+    "get_regulations",
     "check_compliance",
     "act_update_board"
   ],
   "directive_clean": {
-    "cycle": "Tick 0 \u2014 IDLE",
-    "adb": "See directive_raw for ADB citation",
-    "action": "- No OVER capacity violations",
-    "note": "Verbose format parsed"
+    "cycle": "Tick 0 - IDLE",
+    "rooms": "1-12 (Bedroom) (3/3) WARNING",
+    "adb": "Section 2.43 - bedroom occupancy standard; room at maximum permitted capacity",
+    "signs": "None",
+    "action": "No intervention required. Room 1-12 at maximum defined capacity is compliant and safe.",
+    "escalate": "No"
   },
-  "directive_raw": "---\n\n## **Sense-Reason-Act Cycle Complete**\n\n**Sense Result:**\n- Building state: 40 occupants across 4 floors in normal distribution\n- Alert flagged: Room 1-12 at WARNING (3/3 at graph level)\n- No OVER capacity violations\n\n**Reason Result:**\n- Room 1-12 compliance check: **PASS**\n- IFC model shows actual max capacity is 130 persons (Purpose Group 2a Lounge)\n- Graph alert was based on simulation-layer max of 3, causing false positive\n- Current occupancy (3) is only 2.3% of real safe capacity\n\n**Act Result:**\n- **No signs updated** (no genuine violations)\n- **No attractiveness adjustments** (no risk of overcrowding)\n- **Board updated** with false positive note and compliance confirmation\n- **Status:** System idle\u2014all rooms within safe occupancy limits\n\nThe building is operating safely during standard hours. No intervention required.",
+  "directive_raw": "CYCLE: Tick 0 - IDLE\nROOMS: 1-12 (Bedroom) (3/3) WARNING\nADB: Section 2.43 - bedroom occupancy standard; room at maximum permitted capacity\nSIGNS: None\nACTION: No intervention required. Room 1-12 at maximum defined capacity is compliant and safe.\nESCALATE: No",
   "evaluation": {
     "passed": true,
     "sequence_valid": true,
@@ -23,6 +30,6 @@
     "failure_reasons": []
   },
   "sign_updates": 0,
-  "timestamp": "2026-08-10 19:41:02",
+  "timestamp": "2026-08-27 19:55:41",
   "pre_condition": "0 OVER, 1 WARNING"
 }

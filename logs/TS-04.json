@@ -1,39 +1,46 @@
 {
   "scenario_id": "TS-04",
-  "latency_seconds": 44.623,
-  "tool_count": 15,
+  "latency_seconds": 50.687,
+  "api_turns": 12,
+  "api_time_seconds": 49.314,
+  "tool_time_seconds": 1.368,
+  "overhead_seconds": 0.005,
+  "tool_count": 14,
   "tools_used": [
     "sense_building_state",
-    "list_signs",
+    "sense_room",
     "get_regulations",
     "get_regulations",
-    "sense_room",
-    "sense_room",
-    "sense_room",
     "check_compliance",
     "get_regulations",
+    "get_regulations",
+    "get_regulations",
+    "get_regulations",
+    "get_regulations",
     "act_update_sign",
     "act_update_sign",
-    "act_set_room_attractiveness",
-    "act_set_room_attractiveness",
     "act_set_room_attractiveness",
     "act_update_board"
   ],
   "directive_clean": {
-    "cycle": "Tick 0 \u2014 VIOLATION",
-    "adb": "1. ADB Vol2 Section 2.43 \u2014 Bedrooms should not contain more than one single or double bed. Room 3-1, 3-2, and 3-4 violate this standard with 4, 4, and 4 occupants respectively against max bed counts of 4, 3, and 3.",
-    "action": "- Capacity violations on F3: Rooms 3-2 and 3-4 OVER capacity (4/3 each); Room 3-1 at maximum (4/4)",
-    "note": "Verbose format parsed"
+    "cycle": "Tick 0 - VIOLATION",
+    "rooms": "3-10 (Bedroom) (4/3) FAIL",
+    "adb": "Section 2.43 - Residential care home bedroom occupancy standard (max 3 occupants); Section 3.4\u20133.8 - Protected refuges for wheelchair users with emergency voice communication",
+    "signs": "SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> ALTERNATE",
+    "action": "Room 3-10 exceeds capacity; disabled/wheelchair occupants directed to protected refuge zone in F3 stairway enclosure per ADB Cl.3.4\u20133.8; emergency voice system required; standard stairwell B-L3 marked as inaccessible to mobility-impaired occupants; room attractiveness set to 0.0 to prevent new entries.",
+    "escalate": "Yes - Room 3-10 contains 4 occupants at max capacity 3 (133% occupancy); wheelchair-user accommodation requires refuge area with EVC per ADB Vol2 Section 3.7\u20133.8; building management must verify protected refuge zone presence and EVC system functionality on F3."
   },
-  "directive_raw": "## SENSE-REASON-ACT CYCLE COMPLETE\n\n---\n\n### **SENSE SUMMARY**\n- **Total occupancy:** 96 across 4 floors\n- **F3 (Third Floor):** 31 occupants with 5 high-risk alerts\n- **Critical finding:** Room 3-1 has a wheelchair user; exit path routes through **B-L3 (non-accessible stairwell)**\n- **Capacity violations on F3:** Rooms 3-2 and 3-4 OVER capacity (4/3 each); Room 3-1 at maximum (4/4)\n\n---\n\n### **REASON SUMMARY**\n\n**Regulatory Framework Applied:**\n\n1. **ADB Vol2 Section 2.43** \u2014 Bedrooms should not contain more than one single or double bed. Room 3-1, 3-2, and 3-4 violate this standard with 4, 4, and 4 occupants respectively against max bed counts of 4, 3, and 3.\n\n2. **ADB Vol2 Sections 3.4\u20133.8** \u2014 **Refuge Areas for Wheelchair Users**\n   - Minimum size: 900mm \u00d7 1400mm\n   - Must be wheelchair-accessible\n   - Should be located in protected stairway, protected lobby, or protected corridor\n   - **Must provide direct access to protected stairway**\n   - Must have emergency voice communication (EVC) system per BS 5839-9\n\n3. **Critical Accessibility Violation:** The wheelchair user in room 3-1 currently has their primary egress route through **B-L3 (Stairwell B-L3)**, which is **not wheelchair accessible**. This creates a life-safety risk non-compliant with ADB Vol2 Section 3.4.\n\n---\n\n### **ACT SUMMARY**\n\n**Signage Updates (F3):**\n\n| Sign ID | Previous Message | Updated Message | Status | ADB Citation |\n|---------|-----------------|-----------------|--------|--------------|\n| **SIGN_F3_STAIR** | Stairwell A \u2192 Ground Floor Exit | **Stairwell B-L3 not accessible \u2014 wheelchair users proceed to refuge area** | **BLOCKED** | ADB Vol2 Section 3.4-3.8 |\n| **SIGN_F3_CORRIDOR** | Fire Exit \u2193 \u2014 Use Stairwell A | **Wheelchair users \u2014 proceed to protected refuge on this floor or use accessible stair (Stairwell A)** | **ALTERNATE** | ADB Vol2 Section 3.4-3.8 |\n\n**Room Attractiveness Adjustments (to redirect occupants away from OVER capacity rooms):**\n- **Room 3-2** (4/3 OVER): Attractiveness \u2192 **0.0** (fully avoid)\n- **Room 3-4** (4/3 OVER): Attractiveness \u2192 **0.0** (fully avoid)\n- **Room 3-1** (4/4 WARNING + wheelchair user mobility constraints): Attractiveness \u2192 **0.3** (strongly discourage further entry)\n\n---\n\n### **ESCALATION REQUIRED**\n\n**\u26a0\ufe0f Immediate Action Needed by Building Management:**\n\n1. **Verify accessible refuge area exists on F3** per ADB Vol2 Section 3.6 (minimum 900mm \u00d7 1400mm, wheelchair-accessible)\n2. **Confirm emergency voice communication (EVC) system is operational** on F3 per ADB Vol2 Section 3.7 (Type B outstations with master station connectivity)\n3. **Confirm Stairwell A is wheelchair accessible** \u2014 this is the directed alternate egress route\n4. **Staff briefing:** Wheelchair user in room 3-1 must be directed to refuge area or accessible stair, not B-L3\n5. **Monitor room 3-2 and 3-4** for occupancy reduction as attractiveness drops\n\nThe signage now provides **explicit, practical wayfinding** for mobility-impaired occupants while managing room capacity violations through non-physical attractiveness reduction.",
+  "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 3-10 (Bedroom) (4/3) FAIL\nADB: Section 2.43 - Residential care home bedroom occupancy standard (max 3 occupants); Section 3.4\u20133.8 - Protected refuges for wheelchair users with emergency voice communication\nSIGNS: SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> ALTERNATE\nACTION: Room 3-10 exceeds capacity; disabled/wheelchair occupants directed to protected refuge zone in F3 stairway enclosure per ADB Cl.3.4\u20133.8; emergency voice system required; standard stairwell B-L3 marked as inaccessible to mobility-impaired occupants; room attractiveness set to 0.0 to prevent new entries.\nESCALATE: Yes - Room 3-10 contains 4 occupants at max capacity 3 (133% occupancy); wheelchair-user accommodation requires refuge area with EVC per ADB Vol2 Section 3.7\u20133.8; building management must verify protected refuge zone presence and EVC system functionality on F3.",
   "evaluation": {
-    "passed": true,
+    "passed": false,
     "sequence_valid": true,
-    "citation_valid": true,
+    "citation_valid": false,
     "behavior_valid": true,
-    "failure_reasons": []
+    "failure_reasons": [
+      "Citation Error: Failed to autonomously discover target clause ((3\\.5|3\\.6))."
+    ]
   },
   "sign_updates": 2,
-  "timestamp": "2026-08-10 19:40:13",
-  "pre_condition": "F3 high occupancy, wheelchair user"
+  "timestamp": "2026-08-27 19:55:24",
+  "pre_condition": "3-10 over capacity, wheelchair user"
 }

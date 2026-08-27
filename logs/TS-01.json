@@ -1,28 +1,32 @@
 {
   "scenario_id": "TS-01",
-  "latency_seconds": 73.49,
-  "tool_count": 12,
+  "latency_seconds": 29.467,
+  "api_turns": 8,
+  "api_time_seconds": 28.162,
+  "tool_time_seconds": 1.305,
+  "overhead_seconds": 0.0,
+  "tool_count": 10,
   "tools_used": [
     "sense_building_state",
-    "sense_room",
-    "sense_room",
+    "sense_rooms",
     "get_regulations",
     "get_regulations",
-    "get_regulations",
-    "check_compliance",
-    "check_compliance",
-    "list_signs",
+    "check_compliance_batch",
     "act_update_sign",
-    "act_set_room_attractiveness",
+    "act_update_sign",
+    "act_update_sign",
+    "act_set_room_attractiveness_batch",
     "act_update_board"
   ],
   "directive_clean": {
-    "cycle": "Tick 0 \u2014 VIOLATION",
-    "adb": "- Breach Clause: ADB Vol2 Table B1 Purpose Group 2a (occupant load factor for residential care homes) + Section 2.43 (bedroom occupancy standard)",
-    "action": "1. Room 0-4 (Bedroom) \u2014 GENUINE VIOLATION",
-    "note": "Verbose format parsed"
+    "cycle": "Tick 0 - VIOLATION",
+    "rooms": "1-1 (4/3) FAIL, 1-10 (3/3) WARNING, 3-4 (3/3) WARNING, 3-5 (3/3) WARNING",
+    "adb": "Clause 2.43 - bed provision occupancy standard for residential care homes (Purpose Group 2a)",
+    "signs": "SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F1_STAIR -> ALTERNATE | SIGN_F3_CORRIDOR -> ALTERNATE",
+    "action": "Room 1-1 set to attractiveness 0.0 and blocked; rooms 1-10, 3-4, 3-5 set to attractiveness 0.3 with alternate route guidance to redirect occupants away from threshold-capacity bedrooms.",
+    "escalate": "Yes - Room 1-1 is over capacity at 4/3 occupants, exceeding ADB Cl.2.43 threshold by 1 person; three additional rooms at threshold warrant pre-emptive occupancy management."
   },
-  "directive_raw": "---\n\n## **CYCLE COMPLETE: SUMMARY**\n\n### **Sense Result:**\nGround floor congestion event confirmed with **2 OVER alerts**:\n- Room 0-4: 4/3 occupants (33% over)\n- Room 0-20: 15/7 occupants (114% over per graph)\n\n### **Reason Result:**\n**Critical Distinction Identified:**\n\n1. **Room 0-4 (Bedroom)** \u2014 **GENUINE VIOLATION**\n   - Current: 4 occupants\n   - IFC Max: 3 per person\n   - Compliance: **FAIL**\n   - Breach Clause: **ADB Vol2 Table B1 Purpose Group 2a** (occupant load factor for residential care homes) + **Section 2.43** (bedroom occupancy standard)\n\n2. **Room 0-20 (Lounge)** \u2014 **FALSE POSITIVE**\n   - Current: 15 occupants\n   - Graph Alert Threshold: 7 (triggering OVER)\n   - **IFC Actual Max: 130 persons** per Table B1 Purpose Group 2a\n   - Compliance: **PASS**\n   - The simulation's graph uses a different (overly conservative) capacity model than the IFC building information model\n\n### **Act Result:**\n\u2705 **SIGN UPDATED**: SIGN_F0_CORRIDOR_N \u2192 **BLOCKED** with message citing ADB Table B1 Purpose Group 2a and Section 2.43  \n\u2705 **ATTRACTIVENESS REDUCED**: Room 0-4 set to 0.0 (full avoidance) to prevent new occupants  \n\u2705 **BOARD UPDATED**: Directive issued identifying the genuine violation in 0-4 and the false positive in 0-20\n\n**Status**: The system is performing correctly \u2014 it filtered a simulation graph alert against the authoritative IFC building model and identified a genuine safety violation requiring intervention.",
+  "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-1 (4/3) FAIL, 1-10 (3/3) WARNING, 3-4 (3/3) WARNING, 3-5 (3/3) WARNING\nADB: Clause 2.43 - bed provision occupancy standard for residential care homes (Purpose Group 2a)\nSIGNS: SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F1_STAIR -> ALTERNATE | SIGN_F3_CORRIDOR -> ALTERNATE\nACTION: Room 1-1 set to attractiveness 0.0 and blocked; rooms 1-10, 3-4, 3-5 set to attractiveness 0.3 with alternate route guidance to redirect occupants away from threshold-capacity bedrooms.\nESCALATE: Yes - Room 1-1 is over capacity at 4/3 occupants, exceeding ADB Cl.2.43 threshold by 1 person; three additional rooms at threshold warrant pre-emptive occupancy management.",
   "evaluation": {
     "passed": true,
     "sequence_valid": true,
@@ -30,7 +34,7 @@
     "behavior_valid": true,
     "failure_reasons": []
   },
-  "sign_updates": 1,
-  "timestamp": "2026-07-20 13:20:30",
-  "pre_condition": "2 violations"
+  "sign_updates": 3,
+  "timestamp": "2026-08-27 19:52:42",
+  "pre_condition": "1 violations"
 }

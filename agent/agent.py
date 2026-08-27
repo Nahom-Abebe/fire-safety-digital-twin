@@ -1,22 +1,33 @@
 # agent/agent.py
 # Claude Sense-Reason-Act agent for care home occupancy management.
 #
-# Design philosophy (aligned with Peter Lawrence's emails):
-#   - This is an OCCUPANCY MANAGEMENT system, not an evacuation system
-#   - The agent monitors room capacity tick by tick
+# Design Methdology:
 #   - When a room approaches or exceeds its ADB limit, the agent:
 #       1. Retrieves the specific ADB care home clause that applies
 #       2. Cites the exact section/clause number in its response
 #       3. Updates the relevant sign to redirect occupants
 #       4. Lowers room attractiveness so new occupants avoid that area
 #       5. Informs the building manager via the board
-#   - NO evacuation logic, NO fire alarm framing
-#   - The agent responds to what it ACTUALLY sees in the live simulation
 #
-# Board reasoning updates:
-#   - _call_tool() updates the Blender board after each meaningful tool call
-#   - Tom Cole can see the agent's thought process in the UI in real time
-#   - Not just in the terminal log
+#   - The agent responds to what it actually sees in the live simulation
+#
+# Fix applied — real timing telemetry: run_agent_cycle() previously
+# only returned a single flat "latency_seconds" figure, with no way to
+# tell whether that time was spent waiting on the Anthropic API
+# (network + model inference) or executing tools locally (Blender
+# socket calls, ChromaDB queries, IFC writes). A critique of a real
+# session log correctly identified this as a genuine evaluation gap —
+# it also separately claimed "11 roundtrips" and "15-20s of pure
+# network latency", which this fix is what actually lets you check:
+# api_turns counts real client.messages.create() calls (multiple tool
+# calls returned in ONE API response only count as ONE turn, so this
+# is not the same number as tool_count), api_time_seconds is the real
+# measured time spent inside those calls, tool_time_seconds is the
+# sum of each individual tool's own already-tracked duration, and
+# overhead_seconds is whatever's left over (local Python processing,
+# JSON serialization) rather than silently absorbed into either
+# figure. Now the network-bound-vs-code-bound question has a real,
+# measured answer instead of an assumed one either way.
 
 import sys, os, json, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -54,11 +65,18 @@ Call sense_building_state to get current occupancy across all rooms and floors.
 Look at the alerts list:
   - severity WARNING means a room is at 80-99% of its ADB capacity
   - severity OVER    means a room has exceeded its ADB capacity
-Note available_sign_ids in the response — every real corridor sign ID that
-currently exists. ALWAYS pick a sign_id from this list later. Never guess a
-naming pattern (floors other than F0 have no "_N"/"_S" suffix) — a guessed ID
-fails silently and wastes a full round trip discovering the real one via
-list_signs afterward.
+Note available_sign_ids in the response — this is the COMPLETE list of every
+sign that exists in the building. There are no other signs. Specifically:
+there is no dedicated exit sign of any kind — no "SIGN_F0_EXIT_N",
+"SIGN_EXIT", or similar, no matter how naturally a scenario about a blocked
+exit seems to call for one. Exit obstruction is communicated through the
+ordinary corridor sign's own message text (e.g. "North Corridor BLOCKED -
+Use South Exit" on SIGN_F0_CORRIDOR_N) — never invent a new sign_id that
+sounds right for the situation. ALWAYS pick a sign_id EXACTLY from
+available_sign_ids. Never guess a naming pattern (floors other than F0 have
+no "_N"/"_S" suffix) and never invent one that isn't listed at all, even if
+it would fit the narrative — a guessed or invented ID fails silently and
+wastes a full round trip discovering the real one via list_signs afterward.
 
 If there are no alerts, call act_update_board with message
 "All rooms within safe occupancy limits - no action required" and stop.
@@ -66,12 +84,15 @@ If there are no alerts, call act_update_board with message
 REASON:
 If there is more than one alert this cycle, batch your tool calls — use
 sense_rooms (all room labels in ONE call) instead of several sense_room
-calls, and check_compliance_batch (all checks in ONE call) instead of
-several check_compliance calls. Each separate call is a full model round
-trip; three separate sense_room calls for three alerted rooms triples
-that cost for no benefit over one sense_rooms call covering all three.
-Still reason about and prioritise each room individually (OVER before
-WARNING) — only the TOOL CALLS should batch, not the reasoning.
+calls, check_compliance_batch (all checks in ONE call) instead of several
+check_compliance calls, and act_set_room_attractiveness_batch (all rooms'
+attractiveness values in ONE call) instead of several individual
+act_set_room_attractiveness calls. Each separate call is a full model
+round trip; four separate act_set_room_attractiveness calls for four
+rooms needing new attractiveness values quadruples that cost for no
+benefit over one batched call covering all four. Still reason about and
+prioritise each room individually (OVER before WARNING) — only the TOOL
+CALLS should batch, not the reasoning.
 
 Step 1: Call sense_room (single room) or sense_rooms (multiple rooms) to
         get full details including room type, current count, max count,
@@ -112,7 +133,9 @@ returns FAIL or WARNING):
    - Example: "Room 1-16 (Bedroom) at capacity per ADB Cl.2.43 - use alt route"
    - Status: "BLOCKED" for OVER capacity, "ALTERNATE" for WARNING
 
-2. Call act_set_room_attractiveness for the affected room:
+2. Call act_set_room_attractiveness (single room) or
+   act_set_room_attractiveness_batch (multiple rooms) for the affected
+   room(s):
    - OVER capacity  to value 0.0 (fully discourage new occupants entering)
    - WARNING (80%+) to value 0.3 (strongly discourage but not fully block)
 
@@ -183,6 +206,7 @@ def _call_tool(tool_name: str, tool_input: dict,
         get_regulations, check_compliance, check_compliance_batch,
         get_adb_violation_context,
         act_update_sign, act_update_board, act_set_room_attractiveness,
+        act_set_room_attractiveness_batch,
         list_signs,
     )
 
@@ -215,6 +239,8 @@ def _call_tool(tool_name: str, tool_input: dict,
         "act_set_room_attractiveness": lambda i: act_set_room_attractiveness(
                                          i["room_label"],
                                          i["value"]),
+        "act_set_room_attractiveness_batch": lambda i: act_set_room_attractiveness_batch(
+                                         i["rooms"]),
         "list_signs"               : lambda i: list_signs(),
     }
 
@@ -225,8 +251,6 @@ def _call_tool(tool_name: str, tool_input: dict,
     result = handler(tool_input)
 
     # ── Live board reasoning updates ──────────────────────────────────────
-    # Update the Blender board after each meaningful tool call so the
-    # agent's thought process is visible in the UI, not just the terminal.
     if snapshot is not None:
         try:
             from bim.board import update_board as _board
@@ -245,15 +269,6 @@ def _call_tool(tool_name: str, tool_input: dict,
                 max_v  = "?"
                 if isinstance(result, dict):
                     status = result.get("status", "unknown")
-                    # Fix applied: check_occupancy_compliance() returns
-                    # its capacity value under the key "max", not
-                    # "max_occ" — this line was looking for a key that
-                    # never existed in the dict, so it fell through to
-                    # the "?" default on every single call, regardless
-                    # of the room's real capacity. Confirmed directly
-                    # in a real live_agent_runner.py session: "IFC Max:
-                    # ?" appeared on every compliance-check board
-                    # update without exception.
                     max_v  = result.get("max", "?")
                 _board(snapshot,
                        f"COMPLIANCE CHECK: {room}\n"
@@ -274,10 +289,6 @@ def _call_tool(tool_name: str, tool_input: dict,
                 sign   = tool_input.get("sign_id", "")
                 msg    = tool_input.get("message", "")[:40]
                 ref    = tool_input.get("adb_ref", "")[:35]
-                # Was hardcoded "BLOCKED" regardless of actual status —
-                # a WARNING-severity ALTERNATE action showed as a full
-                # block on this live reasoning display. Now reflects
-                # the real status the tool call was actually given.
                 status = tool_input.get("status", "BLOCKED")
                 _board(snapshot,
                        f"ACTION: Sign updated\n"
@@ -293,6 +304,13 @@ def _call_tool(tool_name: str, tool_input: dict,
                        f"Room {room} attractiveness -> {val}\n"
                        f"New occupants discouraged from entering")
 
+            elif tool_name == "act_set_room_attractiveness_batch":
+                rooms = tool_input.get("rooms", [])
+                lines = [f"ACTION: Redirecting occupants ({len(rooms)} rooms):"]
+                for r in rooms[:5]:
+                    lines.append(f"  {r.get('room_label','')} -> {r.get('value','')}")
+                _board(snapshot, "\n".join(lines))
+
             elif tool_name == "get_adb_violation_context":
                 room    = tool_input.get("room_label", "")
                 current = tool_input.get("current", 0)
@@ -303,7 +321,7 @@ def _call_tool(tool_name: str, tool_input: dict,
                        f"Retrieving violation context...")
 
         except Exception:
-            pass  # Board update failure never stops the agent cycle
+            pass  
 
     return result
 
@@ -316,7 +334,9 @@ def run_agent_cycle(client: anthropic.Anthropic,
     """
     Runs one complete Sense-Reason-Act cycle.
     The trigger_message describes the current simulation state.
-    Returns directive, trace, latency, signs_updated, adb_cited.
+    Returns directive, trace, latency, signs_updated, adb_cited, and
+    real timing telemetry (api_turns, api_time_seconds,
+    tool_time_seconds, overhead_seconds) — see module docstring fix note.
     """
     start_time = time.time()
 
@@ -331,6 +351,10 @@ def run_agent_cycle(client: anthropic.Anthropic,
     messages = [{"role": "user", "content": user_msg}]
     trace    = []
 
+    # Real timing telemetry — see module docstring fix note.
+    api_turns        = 0
+    api_time_seconds = 0.0
+
     # Get current snapshot for board reasoning updates
     current_snapshot = None
     try:
@@ -340,6 +364,7 @@ def run_agent_cycle(client: anthropic.Anthropic,
         pass
 
     while True:
+        api_call_start = time.time()
         response = client.messages.create(
             model      = "claude-haiku-4-5-20251001",
             max_tokens = 1000,
@@ -347,6 +372,8 @@ def run_agent_cycle(client: anthropic.Anthropic,
             tools      = TOOLS,
             messages   = messages,
         )
+        api_time_seconds += time.time() - api_call_start
+        api_turns        += 1
 
         if response.stop_reason == "end_turn":
             final_text = " ".join(
@@ -354,17 +381,6 @@ def run_agent_cycle(client: anthropic.Anthropic,
                 if hasattr(b, "text"))
             latency = round(time.time() - start_time, 3)
 
-            # Fix applied: this counted every act_update_sign CALL,
-            # not every successful one — a call with a bad sign_id
-            # (confirmed in a real run: the agent tried
-            # "SIGN_F2_CORRIDOR_N", which doesn't exist; only F0 has
-            # an _N suffix) fails silently inside bim.signage.
-            # update_sign(), returning {"error": ...} with zero real
-            # effect, but still counted toward this total. trace now
-            # stores each call's actual result, so a failed call can
-            # be told apart from a genuine one — this number, and
-            # session_log["total_actions"] which it feeds into, now
-            # reflect real sign changes only.
             signs_updated = sum(
                 1 for t in trace
                 if t["tool"] == "act_update_sign"
@@ -372,21 +388,6 @@ def run_agent_cycle(client: anthropic.Anthropic,
                 and "error" not in t["result"]
             )
 
-            # The actual structured board directive (CYCLE/ROOMS/ADB/
-            # SIGNS/ACTION/ESCALATE) is posted as the agent_message
-            # argument to act_update_board, per the system prompt —
-            # not necessarily repeated in the model's final end_turn
-            # text, which is often just a brief wrap-up after the tool
-            # call has already fired. Using final_text alone meant
-            # both the returned "directive" and the adb_cited check
-            # could reflect that generic wrap-up instead of the real
-            # directive — and live_agent_runner.py posting that wrong
-            # text to the board immediately after run_agent_cycle()
-            # returns would visibly overwrite the correct directive
-            # act_update_board's own live dispatch had just written
-            # moments earlier. Prefer the last act_update_board call's
-            # actual content; fall back to final_text only if the
-            # agent never called it.
             board_directive = None
             for t in reversed(trace):
                 if t["tool"] == "act_update_board":
@@ -404,13 +405,29 @@ def run_agent_cycle(client: anthropic.Anthropic,
                 ]
             )
 
+            tool_time_seconds = round(sum(t["duration"] for t in trace), 3)
+            api_time_rounded   = round(api_time_seconds, 3)
+            # Whatever's left over after accounting for real measured
+            # API time and real measured tool time — local Python
+            # processing, JSON serialization, etc. Reported honestly as
+            # its own figure rather than silently folded into either
+            # of the other two. Should normally be small; a large
+            # value here would itself be worth investigating.
+            overhead_seconds = round(
+                max(latency - tool_time_seconds - api_time_rounded, 0.0), 3
+            )
+
             return {
-                "directive"      : directive_text,
-                "trace"          : trace,
-                "latency_seconds": latency,
-                "tool_count"     : len(trace),
-                "signs_updated"  : signs_updated,
-                "adb_cited"      : adb_cited,
+                "directive"         : directive_text,
+                "trace"             : trace,
+                "latency_seconds"   : latency,
+                "tool_count"        : len(trace),
+                "signs_updated"     : signs_updated,
+                "adb_cited"         : adb_cited,
+                "api_turns"         : api_turns,
+                "api_time_seconds"  : api_time_rounded,
+                "tool_time_seconds" : tool_time_seconds,
+                "overhead_seconds"  : overhead_seconds,
             }
 
         if response.stop_reason == "tool_use":
@@ -473,6 +490,10 @@ def run_evaluation_cycle(client: anthropic.Anthropic,
     result = run_agent_cycle(client, trigger_message=trigger, verbose=True)
 
     print(f"\nLatency      : {result['latency_seconds']}s")
+    print(f"  API turns       : {result['api_turns']}")
+    print(f"  API time        : {result['api_time_seconds']}s")
+    print(f"  Tool exec time  : {result['tool_time_seconds']}s")
+    print(f"  Overhead        : {result['overhead_seconds']}s")
     print(f"Tool calls   : {result['tool_count']}")
     print(f"Signs updated: {result['signs_updated']}")
     print(f"ADB cited    : {result['adb_cited']}")
@@ -527,6 +548,10 @@ if __name__ == "__main__":
 
     print(f"\n{'='*55}")
     print(f"Latency      : {result['latency_seconds']}s")
+    print(f"  API turns       : {result['api_turns']}")
+    print(f"  API time        : {result['api_time_seconds']}s")
+    print(f"  Tool exec time  : {result['tool_time_seconds']}s")
+    print(f"  Overhead        : {result['overhead_seconds']}s")
     print(f"Tool calls   : {result['tool_count']}")
     print(f"Signs updated: {result['signs_updated']}")
     print(f"ADB cited    : {result['adb_cited']}")

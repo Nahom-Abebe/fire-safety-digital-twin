@@ -239,7 +239,10 @@ TOOLS = [
             "Sets room attractiveness (0.0–2.0, default 1.0). "
             "Lower values discourage movement toward this room. "
             "Use to redistribute occupants away from high-density areas "
-            "without blocking physical routes."
+            "without blocking physical routes. "
+            "If setting attractiveness for more than one room this cycle, "
+            "use act_set_room_attractiveness_batch instead — one round "
+            "trip for every room, not one round trip each."
         ),
         "input_schema": {
             "type": "object",
@@ -254,6 +257,46 @@ TOOLS = [
                 }
             },
             "required": ["room_label", "value"]
+        }
+    },
+    {
+        "name": "act_set_room_attractiveness_batch",
+        "description": (
+            "Runs act_set_room_attractiveness for MULTIPLE rooms in a "
+            "single call — the batched equivalent of calling it once per "
+            "room. ALWAYS use this instead of several "
+            "act_set_room_attractiveness calls whenever more than one "
+            "room needs its attractiveness adjusted in the same cycle "
+            "(e.g. one FAIL room needing 0.0 and several WARNING rooms "
+            "needing 0.3)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rooms": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "room_label": {
+                                "type": "string",
+                                "description": "Graph label e.g. '0-20'"
+                            },
+                            "value": {
+                                "type": "number",
+                                "description": "0.0=avoid, 1.0=neutral, 2.0=attract"
+                            }
+                        },
+                        "required": ["room_label", "value"]
+                    },
+                    "description": (
+                        "One entry per room, e.g. "
+                        "[{'room_label': '1-1', 'value': 0.0}, "
+                        "{'room_label': '1-10', 'value': 0.3}]"
+                    )
+                }
+            },
+            "required": ["rooms"]
         }
     },
     {

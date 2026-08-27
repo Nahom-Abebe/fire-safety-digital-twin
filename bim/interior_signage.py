@@ -8,6 +8,34 @@ from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
 from bim.room_geometry import load_room_centroids
 from sensors.building_graph import BUILDING_GRAPH
 
+# The complete, authoritative list of sign IDs that actually have a
+# real Blender panel (SignPanel_/SignText_ objects) — must match
+# SIGN_POSITIONS' keys inside create_corridor_signs() exactly.
+#
+# Fix applied: bim_query.py's SIGNS/get_all_signs() is loaded straight
+# from global_ids_v2.json — the full IFC-derived sign registry, a
+# completely separate set from the 5 signs this file actually renders
+# a visual panel for. mcp_server/server.py's sense_building_state()
+# was exposing get_all_signs()'s FULL list to the agent as
+# available_sign_ids, meaning a sign that exists in the IFC data but
+# was never given a Blender panel here was presented as equally valid
+# to choose. Confirmed directly: the agent picked "SIGN_F0_EXIT_N" and
+# "SIGN_F0_EXIT_S" — both wrote successfully to their IFC Pset (no
+# error, correctly counted as genuine successes) but had no matching
+# panel object for _update_blender_sign_panel() to find, so nothing
+# changed on screen — a real write with zero visible effect. This
+# constant is now imported by mcp_server/server.py to scope
+# available_sign_ids (and list_signs()'s output) down to only signs
+# that can actually be seen to change, so the agent can never again
+# choose one that succeeds "for real" but shows nothing.
+VISUAL_SIGN_IDS = [
+    "SIGN_F0_CORRIDOR_N",
+    "SIGN_F1_CORRIDOR",
+    "SIGN_F2_CORRIDOR",
+    "SIGN_F3_CORRIDOR",
+    "SIGN_F3_STAIR",
+]
+
 
 def create_room_labels() -> dict:
     """
@@ -137,6 +165,10 @@ def create_corridor_signs() -> dict:
     position needs room_geometry.py extended to map stair nodes to
     IFC objects too — out of scope here. Falls back to a fixed offset
     only if the expected centroid is missing from room_centroids.json.
+
+    These five signs are the complete, authoritative visual set — see
+    VISUAL_SIGN_IDS at module level, which MUST be kept in sync with
+    this dict's keys.
     """
     centroids = load_room_centroids()
 

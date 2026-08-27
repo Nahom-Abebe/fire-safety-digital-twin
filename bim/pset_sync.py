@@ -1,7 +1,7 @@
 # bim/pset_sync.py
 # Writes live occupancy data to Pset_FireSafetyStatus for every
 # occupied room in a single batched Blender round trip.
-# Also writes FireAlarmStatus=True to the fire zone space (Peter's pattern).
+# Also writes FireAlarmStatus=True to the fire zone space 
 
 import json, os
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -24,18 +24,36 @@ def bulk_update_occupancy_psets(snapshot: dict) -> dict:
     Blender round trip per tick. This is the live Digital Twin
     write-back — values persist in the IFC file.
 
-    Fix applied: MaxOccupancy was previously never written here, even
-    though max_occ is computed fresh every call via get_max_occupancy()
-    and used to decide ComplianceStatus. Whatever MaxOccupancy value a
-    room's Pset happened to display came from somewhere outside this
-    function entirely (most likely baked into the IFC model itself,
-    not written by any Python script), so the compliance decision and
-    the displayed capacity number could show as self-contradictory —
-    e.g. CurrentOccupancy=2, MaxOccupancy=1, ComplianceStatus=PASS —
-    whenever get_max_occupancy() and that external source disagreed,
-    with no way to trace the decision from the Pset alone. Now writes
-    the exact max_occ value the compliance decision was actually based
-    on, so the Pset is self-consistent and auditable on its own.
+    Fix applied (re-applied — this was fixed once already earlier in
+    the project's history, but the working copy of this file had
+    regressed to the version below without it):
+
+    ComplianceStatus was being derived from snapshot["alerts"], via
+    over_labels/warn_labels built from severity tags on that list.
+    But sensor_sim.py's is_occupancy_alert_relevant() deliberately
+    EXCLUDES non-occupiable, personal-care, and circulation room
+    types (Bath, W/C, Store, Storage, Corridor, Stair, Lobby) from
+    ever appearing in snapshot["alerts"] at all — a fix made
+    specifically to cut alarm-fatigue noise from single-occupant
+    rooms. That's correct for what triggers a live alert, but it
+    means those room TYPES could never reach FAIL or WARNING here,
+    regardless of actual occupancy — confirmed directly against a
+    real Pset dump: a Bath at 2/1 and a Corridor at 18/10 both showed
+    ComplianceStatus=PASS, strictly contradicting their own numbers.
+
+    Now computes ComplianceStatus directly from count vs max_occ for
+    EVERY occupied room, completely decoupled from alert-relevance
+    scope — a room's Pset compliance reflects its own real numbers
+    unconditionally, regardless of whether that room's type is
+    considered alert-worthy for live signage purposes. Also closes a
+    related gap: this had no WARNING tier at all, unlike
+    bim_query.py's check_occupancy_compliance() (used by the live
+    agent's check_compliance tool), which already uses an 80%
+    threshold. Every room exactly at capacity (W/C 1/1, Store 1/1,
+    Corridor 10/10, etc.) showed PASS here despite being genuinely at
+    capacity. Now uses the same 80% threshold as the live agent path,
+    so both compliance-checking pathways in this project agree with
+    each other.
     """
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,10 +61,6 @@ def bulk_update_occupancy_psets(snapshot: dict) -> dict:
 
     label_to_node = {d["label"]: n for n, d in BUILDING_GRAPH.nodes(data=True)}
     occupancy     = snapshot.get("occupancy", {})
-    over_labels   = {a["label"] for a in snapshot.get("alerts", [])
-                     if a["severity"] == "OVER"}
-    warn_labels   = {a["label"] for a in snapshot.get("alerts", [])
-                     if a["severity"] == "WARNING"}
 
     updates = []
     for label, count in occupancy.items():
@@ -54,10 +68,18 @@ def bulk_update_occupancy_psets(snapshot: dict) -> dict:
         node = label_to_node.get(label)
         if not gid or node is None:
             continue
-        max_occ    = get_max_occupancy(node)
-        compliance = ("FAIL"    if label in over_labels
-                      else "WARNING" if label in warn_labels
-                      else "PASS")
+        max_occ = get_max_occupancy(node)
+
+        # Direct comparison — see fix note above. Never gated by
+        # whether this room's type would trigger a live alert.
+        ratio = (count / max_occ) if max_occ > 0 else 0
+        if count > max_occ:
+            compliance = "FAIL"
+        elif max_occ > 0 and ratio >= 0.8:
+            compliance = "WARNING"
+        else:
+            compliance = "PASS"
+
         updates.append((gid, count, max_occ, compliance))
 
     if not updates:
