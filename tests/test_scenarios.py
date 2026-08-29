@@ -81,7 +81,7 @@ from typing import Dict, List, Any, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import anthropic
-from agent.agent import run_agent_cycle
+from agent.agent import run_agent_cycle, make_client
 from sensors.sensor_sim import (
     initialise_occupants, get_sensor_snapshot, update_sign_status
 )
@@ -89,7 +89,7 @@ from sensors.building_graph import BUILDING_GRAPH as G, get_max_occupancy
 from fix_and_bake import SCENARIOS as BAKE_SCENARIOS
 
 os.makedirs("logs", exist_ok=True)
-client = anthropic.Anthropic()
+client = make_client()
 
 
 def _prewarm_pipeline():

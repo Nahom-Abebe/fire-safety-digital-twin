@@ -1,18 +1,18 @@
 {
   "scenario_id": "TS-02",
-  "latency_seconds": 2505.839,
-  "api_turns": 95,
-  "api_time_seconds": 2504.196,
-  "tool_time_seconds": 1.637,
-  "overhead_seconds": 0.006,
+  "latency_seconds": 36.645,
+  "api_turns": 7,
+  "api_time_seconds": 33.867,
+  "tool_time_seconds": 2.774,
+  "overhead_seconds": 0.004,
   "tool_count": 11,
   "tools_used": [
     "sense_building_state",
+    "list_signs",
     "sense_rooms",
     "get_regulations",
     "get_regulations",
     "check_compliance_batch",
-    "list_signs",
     "act_update_sign",
     "act_update_sign",
     "act_update_sign",
@@ -21,13 +21,13 @@
   ],
   "directive_clean": {
     "cycle": "Tick 0 - VIOLATION",
-    "rooms": "1-2 (4/3) FAIL, 1-3 (3/3) WARNING, 2-7 (5/3) FAIL, 3-5 (3/3) WARNING, 3-6 (5/3) FAIL, 3-8 (3/3) WARNING, 3-12 (3/3) WARNING",
-    "adb": "Table 2.1 - Escape route travel distance max 9m one direction, 18m multiple directions for Purpose Group 2a bedrooms; Section 2.43 - bedroom occupancy per bed provision",
+    "rooms": "1-2 (4/3) FAIL, 1-3 (3/3) WARNING, 2-7 (5/3) FAIL, 3-5 (3/3) WARNING, 3-6 (5/3) FAIL, 3-8 (3/3) WARNING",
+    "adb": "Vol2 Table 2.1 escape route travel distance & Clause 2.43 bedroom occupancy - North exit obstructed, South routing enforced; multiple bedrooms at or over capacity per bed provision limits",
     "signs": "SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F2_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> BLOCKED",
-    "action": "North Exit obstructed; redirected all floor corridors to South Exit via Stairwell B. Set 3 FAIL rooms (1-2, 2-7, 3-6) attractiveness to 0.0. Set 4 WARNING rooms (1-3, 3-5, 3-8, 3-12) attractiveness to 0.3 per ADB Cl.2.43.",
-    "escalate": "Yes - North Exit route obstruction requires immediate occupant redirection; 3 bedrooms exceed capacity, 4 at maximum"
+    "action": "All floors redirected from North exit to South exit per Table 2.1. Rooms 1-2, 2-7, 3-6 set to attractiveness 0.0 (occupied at FAIL). Rooms 1-3, 3-5, 3-8 set to 0.3 (at WARNING).",
+    "escalate": "Yes - North exit obstruction combined with 3 bedrooms exceeding capacity and 3 at maximum. Immediate management review required."
   },
-  "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-2 (4/3) FAIL, 1-3 (3/3) WARNING, 2-7 (5/3) FAIL, 3-5 (3/3) WARNING, 3-6 (5/3) FAIL, 3-8 (3/3) WARNING, 3-12 (3/3) WARNING\nADB: Table 2.1 - Escape route travel distance max 9m one direction, 18m multiple directions for Purpose Group 2a bedrooms; Section 2.43 - bedroom occupancy per bed provision\nSIGNS: SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F2_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> BLOCKED\nACTION: North Exit obstructed; redirected all floor corridors to South Exit via Stairwell B. Set 3 FAIL rooms (1-2, 2-7, 3-6) attractiveness to 0.0. Set 4 WARNING rooms (1-3, 3-5, 3-8, 3-12) attractiveness to 0.3 per ADB Cl.2.43.\nESCALATE: Yes - North Exit route obstruction requires immediate occupant redirection; 3 bedrooms exceed capacity, 4 at maximum",
+  "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-2 (4/3) FAIL, 1-3 (3/3) WARNING, 2-7 (5/3) FAIL, 3-5 (3/3) WARNING, 3-6 (5/3) FAIL, 3-8 (3/3) WARNING\nADB: Vol2 Table 2.1 escape route travel distance & Clause 2.43 bedroom occupancy - North exit obstructed, South routing enforced; multiple bedrooms at or over capacity per bed provision limits\nSIGNS: SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F2_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> BLOCKED\nACTION: All floors redirected from North exit to South exit per Table 2.1. Rooms 1-2, 2-7, 3-6 set to attractiveness 0.0 (occupied at FAIL). Rooms 1-3, 3-5, 3-8 set to 0.3 (at WARNING).\nESCALATE: Yes - North exit obstruction combined with 3 bedrooms exceeding capacity and 3 at maximum. Immediate management review required.",
   "evaluation": {
     "passed": true,
     "sequence_valid": true,
@@ -36,6 +36,6 @@
     "failure_reasons": []
   },
   "sign_updates": 3,
-  "timestamp": "2026-08-27 20:58:16",
+  "timestamp": "2026-08-29 17:14:23",
   "pre_condition": "['EXIT-1'] blocked"
 }

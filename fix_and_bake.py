@@ -4,14 +4,32 @@
 # the four primary corridor signs, and the scenario-specific extra signs)
 # is derived from the live per-tick simulation output, not from fixed
 # strings pinned to a chosen frame number.
-
+#
+# Fix applied: --jump only ever set the frame number — it had no
+# knowledge of which scenario was baked or which room violated, so it
+# could only give the same whole-building framing every time, and the
+# printed "Tip" command didn't even include --scenario, meaning a
+# copy-pasted jump after running e.g. TS-03 would silently use the
+# "default" scenario's data instead. --jump now also accepts
+# --scenario and, unless --no-zoom is passed, automatically finds the
+# EXACT occupant cones sitting inside the violating room(s) at that
+# tick (via a fresh, identical re-run of the same deterministic
+# simulation — the same trick _build_extra_sign_schedule() already
+# uses for the reactive signs) and zooms the viewport onto exactly
+# those cones. Works for every scenario, including TS-03's two
+# simultaneous rooms (both rooms' cones get selected together, so the
+# view naturally widens to fit both without extra logic).
 
 import sys, os, time, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from bim.ifc_bridge import send_to_blender, test_connection
 from bim.animation_baker import bake_animation
-from bim.viewport_utils import frame_view_on_objects
+from bim.viewport_utils import (
+    frame_view_on_objects, frame_view_on_specific_objects,
+    position_interior_camera, set_upper_floor_occlusion,
+)
+from bim.room_geometry import load_room_centroids
 from sensors.agent_walk import simulate_agent_timeline
 from sensors.building_graph import BUILDING_GRAPH as G
 
@@ -107,7 +125,17 @@ SCENARIOS = {
         "violation_room"  : "3-10",
         "ticks"           : 25,
         "seed"            : 7,
-        "adb_ref"         : "ADB Sections 3.5-3.6 — wheelchair refuge provisions",
+        # Was "3.5-3.6" — widened after checking a real source: a UK
+        # government report on means of escape for disabled people
+        # directly cites "Clause 3.4c" as governing how many refuge
+        # spaces a building needs relative to its wheelchair users —
+        # confirming 3.4 is genuinely part of the same refuge-
+        # provisions cluster as 3.5-3.6, not a different topic.
+        # Confirmed necessary directly: the live agent twice cited
+        # "Section 3.4" specifically (not a 3.5-3.6 range) for this
+        # exact scenario, and the narrower ground truth incorrectly
+        # failed a citation that real ADB text supports.
+        "adb_ref"         : "ADB Sections 3.4-3.6 — wheelchair refuge provisions",
         "blocked_exits"   : [],
         "multi_violations": [],
         "mobility_node"   : "3-10",
@@ -309,10 +337,122 @@ for area in bpy.context.screen.areas:
 """)
 
 
+def _find_peak_occupancy_tick(sc: dict, total_occupants: int,
+                              effective_mobility_node: str,
+                              mobility_refuge: bool,
+                              room_labels: list) -> tuple:
+    """
+    Fix applied, second pass: an earlier version searched only
+    [violation_tick, violation_tick + 8] — forward from the trigger
+    tick. Confirmed directly against real output: this found zero
+    occupants for TS-01 and only 1 for TS-03/TS-04. The direction was
+    backwards — violation_tick is when attractiveness DROPS
+    specifically to DISCOURAGE further entry, so genuine overcrowding
+    from unconstrained random-walk accumulation likely peaks BEFORE
+    that intervention, not after. A windowed backward+forward search
+    was tried next, but given how cheap re-running this simulation
+    already is regardless of window size, and having already gotten
+    the search direction wrong once, this now searches the ENTIRE
+    timeline rather than risk guessing a window size too — no
+    meaningful cost difference, removes the risk entirely.
+
+    Returns (peak_tick, cone_names) — cone_names is the Occupant_NNN
+    list at whichever tick genuinely has the most occupants across
+    room_labels, found by checking every tick, not assumed. Re-runs
+    the same deterministic simulation used for the bake (identical
+    seed + parameters => identical result — the same pattern
+    _build_extra_sign_schedule() already uses), so this reads real
+    simulated state. Passing multiple room_labels (e.g. TS-03's two
+    simultaneous rooms) counts and returns cones from all of them
+    together.
+    """
+    timeline = simulate_agent_timeline(
+        total_occupants  = total_occupants,
+        total_ticks      = sc["ticks"],
+        violation_tick    = sc["violation_tick"],
+        violation_room    = sc["violation_room"],
+        seed              = sc["seed"],
+        blocked_exits     = sc.get("blocked_exits", []),
+        multi_violations  = sc.get("multi_violations", []),
+        mobility_node     = effective_mobility_node,
+        mobility_refuge   = mobility_refuge,
+    )
+
+    room_nodes = {
+        n for n, d in G.nodes(data=True) if d["label"] in room_labels
+    }
+    if not room_nodes:
+        return (sc["violation_tick"], [])
+
+    start = 0
+    end   = len(timeline) - 1
+
+    best_tick, best_names = start, []
+    for t in range(start, end + 1):
+        agent_nodes = timeline[t]["agent_nodes"]
+        names = [
+            f"Occupant_{i:03d}"
+            for i, n in enumerate(agent_nodes)
+            if n in room_nodes
+        ]
+        if len(names) > len(best_names):
+            best_tick, best_names = t, names
+
+    return (best_tick, best_names)
+
+
+def _cones_in_rooms_at_tick(sc: dict, total_occupants: int, tick: int,
+                            effective_mobility_node: str,
+                            mobility_refuge: bool,
+                            room_labels: list) -> list:
+    """
+    Re-runs the SAME deterministic simulation used for the bake
+    (identical seed + parameters => identical result — the same
+    pattern _build_extra_sign_schedule() already uses for the
+    reactive signs) purely to read, at a specific tick, exactly which
+    Occupant_NNN cones are inside the given room(s). Used to zoom the
+    viewport on the EXACT cones showing the violation, not a rough
+    proximity guess. Passing multiple room_labels (e.g. TS-03's two
+    simultaneous rooms) returns cones from all of them together, so
+    the resulting framed view naturally widens to fit both.
+
+    Prefer _find_peak_occupancy_tick() over this for zoom purposes —
+    it searches for the tick that actually has occupants rather than
+    trusting a single assumed tick. Kept as a building block for that
+    function and for any caller that already knows the correct tick.
+    """
+    timeline = simulate_agent_timeline(
+        total_occupants  = total_occupants,
+        total_ticks      = sc["ticks"],
+        violation_tick    = sc["violation_tick"],
+        violation_room    = sc["violation_room"],
+        seed              = sc["seed"],
+        blocked_exits     = sc.get("blocked_exits", []),
+        multi_violations  = sc.get("multi_violations", []),
+        mobility_node     = effective_mobility_node,
+        mobility_refuge   = mobility_refuge,
+    )
+    if tick < 0 or tick >= len(timeline):
+        return []
+
+    room_nodes = {
+        n for n, d in G.nodes(data=True) if d["label"] in room_labels
+    }
+    if not room_nodes:
+        return []
+
+    agent_nodes = timeline[tick]["agent_nodes"]
+    return [
+        f"Occupant_{i:03d}"
+        for i, n in enumerate(agent_nodes)
+        if n in room_nodes
+    ]
+
+
 # ── Reactive extra-sign schedule ───────────────────────────────────────────────
 # Re-runs the SAME deterministic simulation used for the bake (identical
-# seed and parameters => identical result) purely in Python, so we can
-# read real per-tick alerts and derive extra-sign state from them.
+# seed and parameters => identical result), so we can read real per-tick
+# alerts and derive extra-sign state from them.
 # This is the mechanism that makes the extra signs (south exit,
 # zone-clear, stairwell) reactive rather than pinned text.
 
@@ -576,8 +716,9 @@ def main(scenario: str = "default",
     print("\nAnimation complete.")
     if not baseline:
         v_frame = sc["violation_tick"] * frames_per_tick
-        print(f"Tip — jump to violation frame:")
-        print(f"  python fix_and_bake.py --jump {v_frame}")
+        print(f"Tip — jump to violation frame and zoom onto it:")
+        print(f"  python fix_and_bake.py --scenario {scenario} "
+              f"--jump {v_frame} --fps {frames_per_tick}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -590,15 +731,110 @@ if __name__ == "__main__":
     parser.add_argument("--fps",   type=int,   default=24)
     parser.add_argument("--speed", type=float, default=0.08)
     parser.add_argument("--jump",  type=int,   default=None)
+    parser.add_argument("--no-zoom", action="store_true",
+                        help="With --jump, skip auto-zoom onto the "
+                             "violating room's cones — just jump to "
+                             "the frame with the standard whole-"
+                             "building view")
     args = parser.parse_args()
 
     if args.jump is not None:
         print("Checking Blender connection...")
-        if test_connection():
-            print(f"Jumping to frame {args.jump}...")
-            _jump_to_frame(args.jump)
-            print(f"At frame {args.jump}")
-        else:
+        if not test_connection():
             print("FAILED")
+            sys.exit(1)
+
+        sc       = SCENARIOS.get(args.scenario, SCENARIOS["default"])
+        baseline = _is_baseline(sc)
+
+        target_frame = args.jump
+        zoom_names   = []
+        zoomed_room  = False
+
+        if not args.no_zoom and not baseline:
+            total_occupants = 80
+            effective_mobility_node = sc.get("mobility_node") or sc["violation_room"]
+            mobility_refuge         = sc.get("mobility_refuge", False)
+
+            rooms_to_zoom = [sc["violation_room"]]
+            for mv in sc.get("multi_violations", []):
+                rooms_to_zoom.append(mv["room"])
+
+            # Searches the WHOLE timeline for the tick that actually
+            # has the most occupants in the room, rather than assuming
+            # violation_tick is the peak — see _find_peak_occupancy_tick()
+            # docstring. Confirmed necessary through two rounds of
+            # testing: assuming violation_tick was the peak found zero
+            # cones across three scenarios; a forward-only search
+            # window found zero for TS-01 and only 1 for TS-03/TS-04.
+            peak_tick, zoom_names = _find_peak_occupancy_tick(
+                sc, total_occupants,
+                effective_mobility_node, mobility_refuge, rooms_to_zoom)
+
+            if zoom_names:
+                target_frame = peak_tick * args.fps
+
+                # Room-size-proportional framing, not cone-count-
+                # dependent — see position_interior_camera() docstring
+                # for why view_selected() on 1-2 small cones produced
+                # an unusably tight close-up ("weird close up which is
+                # very difficult to see"). Averages centroids across
+                # all rooms being zoomed so a multi-room case like
+                # TS-03 frames both together.
+                centroids      = load_room_centroids()
+                room_centroids = [centroids[r] for r in rooms_to_zoom
+                                  if r in centroids]
+                if room_centroids:
+                    avg_x = sum(c["x"] for c in room_centroids) / len(room_centroids)
+                    avg_y = sum(c["y"] for c in room_centroids) / len(room_centroids)
+                    avg_z = sum(c["z"] for c in room_centroids) / len(room_centroids)
+                    size  = max(max(c["dx"], c["dy"]) for c in room_centroids)
+                    if len(room_centroids) > 1:
+                        spread = max(
+                            ((a["x"] - b["x"]) ** 2 + (a["y"] - b["y"]) ** 2) ** 0.5
+                            for a in room_centroids for b in room_centroids
+                        )
+                        size = max(size, spread)
+                    zoomed_room = True
+
+        print(f"Jumping to frame {target_frame} (scenario: {args.scenario})...")
+        _jump_to_frame(target_frame)
+        if zoomed_room:
+            # Only wireframe geometry ABOVE the target room's own
+            # floor — the room's own floor and everything below stays
+            # fully solid, for spatial grounding. See
+            # set_upper_floor_occlusion() docstring.
+            set_upper_floor_occlusion(above_z=avg_z, hide=True)
+            position_interior_camera(
+                avg_x, avg_y, avg_z, size, size,
+                room_label='+'.join(rooms_to_zoom))
+            print(f"  Interior_Camera positioned — bind a viewport to it "
+                  f"with Numpad 0 (View > Viewpoint > Camera) to see it, "
+                  f"e.g. the right panel of a split-screen setup")
+        elif zoom_names:
+            frame_view_on_specific_objects(zoom_names)
+
+        if zoom_names:
+            if target_frame != args.jump:
+                print(f"  Note: requested frame {args.jump} (tick "
+                      f"{args.jump // args.fps}) had no occupants in "
+                      f"{'+'.join(rooms_to_zoom)} — used tick {peak_tick} "
+                      f"instead, the tick with the most occupants there "
+                      f"(searched the full timeline)")
+            print(f"At frame {target_frame}, zoomed onto {len(zoom_names)} "
+                  f"cone(s) in {'+'.join(rooms_to_zoom)}")
+        elif baseline:
+            print(f"At frame {target_frame} — baseline scenario has no "
+                  f"violation to zoom onto")
+        elif args.no_zoom:
+            print(f"At frame {target_frame} (--no-zoom, whole-building view)")
+        else:
+            print(f"At frame {target_frame} — no occupants found in "
+                  f"{'+'.join(rooms_to_zoom)} across the ENTIRE "
+                  f"simulation timeline, not just a window. This means "
+                  f"this scenario's seed genuinely never puts more than "
+                  f"the tracked marker occupant in this room — worth "
+                  f"reconsidering the scenario's seed or violation_room "
+                  f"if a multi-occupant visual matters for this one.")
     else:
         main(args.scenario, args.fps, args.speed)

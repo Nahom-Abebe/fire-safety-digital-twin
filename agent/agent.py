@@ -33,7 +33,45 @@ import sys, os, json, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import anthropic
+
+# Anthropic's SDK is httpx-based; without an explicit client-level
+# timeout, a stalled connection can block indefinitely on the raw
+# socket read with nothing to interrupt it. Confirmed directly: a real
+# run's traceback bottomed out in httpcore._backends.sync.read() ->
+# ssl.read(), requiring a manual KeyboardInterrupt to escape — not a
+# theory, the exact call stack of an unbounded blocking socket read.
+# Every caller should build its client via this function rather than
+# calling anthropic.Anthropic() directly, so the timeout is set in one
+# place instead of needing to be duplicated (and potentially missed)
+# in every script that creates a client.
+def make_client() -> anthropic.Anthropic:
+    return anthropic.Anthropic(timeout=30.0, max_retries=2)
+
+
+try:
+    from anthropic import APITimeoutError, APIConnectionError, APIError
+except ImportError:
+    # Older/newer SDK versions may name these differently — fall back
+    # to catching the base Exception type rather than silently not
+    # catching anything at all if the specific names don't exist.
+    APITimeoutError = APIConnectionError = APIError = Exception
+
 from agent.tool_schemas import TOOLS
+
+# Moved to module scope from inside _call_tool() — code hygiene, not a
+# latency fix. Python caches module imports in sys.modules, so a
+# repeated in-function import is a microsecond-scale dict lookup, not
+# a re-execution of the module; this is not a meaningful contributor
+# to a latency problem measured in seconds. No circular import risk —
+# mcp_server.server does not import from agent.py.
+from mcp_server.server import (
+    sense_building_state, sense_room, sense_rooms, advance_tick,
+    get_regulations, check_compliance, check_compliance_batch,
+    get_adb_violation_context,
+    act_update_sign, act_update_board, act_set_room_attractiveness,
+    act_set_room_attractiveness_batch,
+    list_signs,
+)
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are an intelligent occupancy management AI agent for a
@@ -94,23 +132,39 @@ benefit over one batched call covering all four. Still reason about and
 prioritise each room individually (OVER before WARNING) — only the TOOL
 CALLS should batch, not the reasoning.
 
+If you can already tell from the alerted room labels which room type(s)
+are involved (e.g. numbered rooms are almost always bedrooms in this
+building), you may call sense_rooms and get_regulations in the SAME
+turn rather than waiting for sense_rooms' result first — each avoided
+turn is a full round trip saved. Only do this when you are genuinely
+confident of the room type from context; if you are not sure, wait for
+sense_rooms' result before choosing your get_regulations query so the
+query stays specific rather than generic.
+
 Step 1: Call sense_room (single room) or sense_rooms (multiple rooms) to
         get full details including room type, current count, max count,
         and the IFC long name for every alerted room.
 
-Step 2: Call get_regulations ONCE per cycle with a query SPECIFICALLY
-        about care home occupancy for the room type(s) involved. Use
-        queries like:
+Step 2: Call get_regulations with a query SPECIFICALLY about care home
+        occupancy for the room type(s) involved. Use queries like:
         - "residential care home bedroom occupancy ADB Section 2.43"
         - "residential care home corridor escape route Section 2.33"
         - "Purpose Group 2a travel distance Table 2.1 care home"
+        If a blocked exit is involved anywhere in this cycle, ALWAYS
+        include one query specifically along the lines of "ADB Table
+        2.1 travel distance limits Purpose Group 2a" — travel distance
+        is the specific, correct provision for exit obstruction, not a
+        general "escape routes" or "general provisions" query.
         Do NOT use generic queries. Always reference the care home context.
-        Only call it a SECOND time if this cycle genuinely involves two
-        clearly different room types needing two different clauses
-        (e.g. a bedroom AND a corridor in the same cycle) — each
-        get_regulations call is a full round trip, so do not make a
-        second, speculative, or near-duplicate query when one
-        well-chosen query already covers every room in this cycle.
+        HARD LIMIT: never call get_regulations more than TWICE in one
+        cycle, no exceptions — confirmed necessary directly: a real
+        cycle made 5 separate get_regulations calls searching for the
+        same travel-distance content it could have found in its first
+        query, tripling latency for no benefit. Call it a second time
+        ONLY if this cycle genuinely involves two clearly different
+        room types needing two different clauses (e.g. a bedroom AND a
+        blocked exit in the same cycle) — never a third time, and never
+        a near-duplicate rephrasing of a query you already made.
 
 Step 3: Call check_compliance (single room) or check_compliance_batch
         (multiple rooms) using the IFC long name (e.g. "Bedroom", "Lounge")
@@ -172,6 +226,13 @@ returns FAIL or WARNING):
 CRITICAL RULES:
 1. NEVER use vague citations like "ADB Vol2 Table B1" - always give the
    specific section/clause/table number from the retrieved passage.
+   If ANY blocked exit is part of this cycle, you MUST explicitly cite
+   "Table 2.1" by name in both the affected sign message(s) and the
+   board directive's ADB line — confirmed necessary directly: a real
+   cycle retrieved the correct Table 2.1 content in its very first
+   query, then never actually included it in the final directive,
+   citing only the unrelated bedroom clause instead. Retrieving the
+   right content is not enough — it must appear in what you write.
 2. NEVER trigger building-wide actions. Only act on the specific room
    or corridor that has exceeded or is approaching its limit.
 3. NEVER invent occupancy numbers. Always call sense_room/sense_rooms or
@@ -196,20 +257,12 @@ CRITICAL RULES:
 def _call_tool(tool_name: str, tool_input: dict,
                snapshot: dict = None):
     """
-    Dispatches tool calls directly to MCP server functions.
+    Dispatches tool calls directly to MCP server functions (imported
+    at module scope — see top of file).
     Updates the Blender board after each meaningful tool call so
     Tom Cole can see the agent reasoning step by step in the UI.
     snapshot: current building state for board updates (optional)
     """
-    from mcp_server.server import (
-        sense_building_state, sense_room, sense_rooms, advance_tick,
-        get_regulations, check_compliance, check_compliance_batch,
-        get_adb_violation_context,
-        act_update_sign, act_update_board, act_set_room_attractiveness,
-        act_set_room_attractiveness_batch,
-        list_signs,
-    )
-
     dispatch = {
         "sense_building_state"     : lambda i: sense_building_state(),
         "sense_room"               : lambda i: sense_room(
@@ -326,6 +379,42 @@ def _call_tool(tool_name: str, tool_input: dict,
     return result
 
 
+def _incomplete_cycle_result(trace: list, api_turns: int,
+                             api_time_seconds: float, start_time: float,
+                             reason: str) -> dict:
+    """
+    Shared bounded-result shape for a cycle that could not complete
+    normally — used both when MAX_TURNS is hit and when the API call
+    itself fails or times out, so both failure modes return the same
+    well-formed dict shape callers already expect, rather than one of
+    them crashing the caller with an unhandled exception.
+    """
+    latency = round(time.time() - start_time, 3)
+    tool_time_seconds = round(sum(t["duration"] for t in trace), 3)
+    return {
+        "directive"         : f"CYCLE INCOMPLETE — {reason}",
+        "trace"             : trace,
+        "latency_seconds"   : latency,
+        "tool_count"        : len(trace),
+        "signs_updated"     : sum(
+            1 for t in trace
+            if t["tool"] == "act_update_sign"
+            and isinstance(t.get("result"), dict)
+            and "error" not in t["result"]
+        ),
+        "adb_cited"         : False,
+        "api_turns"         : api_turns,
+        "api_time_seconds"  : round(api_time_seconds, 3),
+        "tool_time_seconds" : tool_time_seconds,
+        "overhead_seconds"  : round(
+            max(latency - tool_time_seconds - api_time_seconds, 0.0), 3
+        ),
+        "max_turns_exceeded": "max API turns" in reason,
+        "api_error"         : reason if ("timed out" in reason
+                                         or "API error" in reason) else None,
+    }
+
+
 # ── Single Sense-Reason-Act cycle ─────────────────────────────────────────────
 
 def run_agent_cycle(client: anthropic.Anthropic,
@@ -355,6 +444,22 @@ def run_agent_cycle(client: anthropic.Anthropic,
     api_turns        = 0
     api_time_seconds = 0.0
 
+    # Hard safety cap — confirmed necessary directly: a real cycle ran
+    # 95 API turns / 2505 seconds (41+ minutes) before eventually
+    # completing correctly, with only 11 actual tool calls visible in
+    # that entire span. Leading hypothesis: a turn returning
+    # stop_reason == "tool_use" with NO actual tool_use block in its
+    # content wasn't being detected below, so an empty tool_results
+    # list got sent back as the next user turn, and if the model
+    # responds to an empty result with another empty "tool_use" turn,
+    # nothing in the original loop would ever break that cycle. Root
+    # cause isn't fully confirmed — the loop never logged anything for
+    # a turn with no visible tool call, so those ~84 turns were
+    # invisible even in hindsight — but no real cycle in a system
+    # meant to run repeatedly should ever be allowed to spend unbounded
+    # API turns regardless of what's actually causing it.
+    MAX_TURNS = 15
+
     # Get current snapshot for board reasoning updates
     current_snapshot = None
     try:
@@ -364,16 +469,69 @@ def run_agent_cycle(client: anthropic.Anthropic,
         pass
 
     while True:
+        if api_turns >= MAX_TURNS:
+            print(f"  WARNING: cycle exceeded {MAX_TURNS} API turns — "
+                  f"stopping and returning whatever was accomplished so "
+                  f"far, not looping further. See agent.py's MAX_TURNS "
+                  f"fix note.")
+            return _incomplete_cycle_result(
+                trace, api_turns, api_time_seconds, start_time,
+                "exceeded max API turns"
+            )
+
         api_call_start = time.time()
-        response = client.messages.create(
-            model      = "claude-haiku-4-5-20251001",
-            max_tokens = 1000,
-            system     = SYSTEM_PROMPT,
-            tools      = TOOLS,
-            messages   = messages,
-        )
+        try:
+            response = client.messages.create(
+                model      = "claude-haiku-4-5-20251001",
+                # Fix applied: 1000 was tight enough that a response
+                # combining explanatory text with a multi-room tool_use
+                # JSON payload could hit stop_reason=="max_tokens" —
+                # a value neither of this loop's two original branches
+                # handled at all, meaning the identical request would be
+                # silently resent unchanged. This independently
+                # corroborates the leading hypothesis for a real incident
+                # where one cycle spun 95 turns / 2505 seconds — see the
+                # MAX_TURNS and stop_reason fixes below. Raising this
+                # reduces how often that failure mode can occur at all,
+                # on top of (not instead of) the defensive turn-cap fix.
+                max_tokens = 2048,
+                system     = SYSTEM_PROMPT,
+                tools      = TOOLS,
+                messages   = messages,
+            )
+        except (APITimeoutError, APIConnectionError, APIError) as e:
+            # Fix applied: the client previously had no timeout at all
+            # (anthropic.Anthropic() default) — confirmed directly, a
+            # real run's traceback showed an unbounded blocking socket
+            # read requiring a manual KeyboardInterrupt to escape.
+            # make_client() now sets a real client-level timeout, so
+            # this exception can actually fire instead of hanging
+            # forever — and now that it can fire, it needs to be
+            # caught and turned into a bounded result rather than
+            # crashing the caller (test_scenarios.py, live_agent_runner.py)
+            # with an unhandled exception.
+            api_time_seconds += time.time() - api_call_start
+            api_turns        += 1
+            print(f"  WARNING: API call failed ({type(e).__name__}: {e}) "
+                  f"after {api_turns} turn(s) — returning what was "
+                  f"accomplished, not hanging or crashing.")
+            return _incomplete_cycle_result(
+                trace, api_turns, api_time_seconds, start_time,
+                f"API error: {type(e).__name__}"
+            )
         api_time_seconds += time.time() - api_call_start
         api_turns        += 1
+
+        # Diagnostic — prints for EVERY turn that produces no visible
+        # tool call, not just ones that do. Directly closes the
+        # visibility gap that made the 95-turn incident's ~84 silent
+        # turns impossible to diagnose after the fact.
+        tool_blocks_this_turn = [b for b in response.content if b.type == "tool_use"]
+        if verbose and not tool_blocks_this_turn:
+            text_preview = " ".join(
+                b.text for b in response.content if hasattr(b, "text"))[:150]
+            print(f"  [turn {api_turns}] stop_reason={response.stop_reason}, "
+                  f"NO tool_use block — text: {text_preview!r}")
 
         if response.stop_reason == "end_turn":
             final_text = " ".join(
@@ -463,12 +621,66 @@ def run_agent_cycle(client: anthropic.Anthropic,
                 tool_results.append({
                     "type"       : "tool_result",
                     "tool_use_id": block.id,
-                    "content"    : json.dumps(result, default=str)[:3000],
+                    # Reduced from 3000 — every tool result gets
+                    # appended to conversation history and reprocessed
+                    # as context on every subsequent turn, so a long
+                    # cycle's context (and per-turn generation time)
+                    # grows with each tool call. Worth noting: a real
+                    # incident's 95 turns averaged ~26s/turn, notably
+                    # higher than the 3-9s/turn range seen in every
+                    # normal run — consistent with, though not
+                    # confirmed as caused by, growing context length
+                    # over that many turns.
+                    "content"    : json.dumps(result, default=str)[:1500],
                 })
 
+            if tool_results:
+                messages.append({
+                    "role"   : "user",
+                    "content": tool_results
+                })
+            else:
+                # Fix applied: stop_reason=="tool_use" with NO actual
+                # tool_use block ever produces an EMPTY tool_results
+                # list here — sending that back as ambiguous, empty
+                # user content is the leading hypothesis for how a
+                # real cycle spun 95 turns / 41 minutes with no
+                # visible progress (see MAX_TURNS fix note above). An
+                # explicit corrective instruction gives the model a
+                # much clearer signal to actually act or finish,
+                # rather than an empty acknowledgment it may just
+                # repeat the same non-response to.
+                messages.append({
+                    "role"   : "user",
+                    "content": (
+                        "No valid tool call was found in your last response. "
+                        "You must either call a real tool from your available "
+                        "tools, or call act_update_board to end this cycle. "
+                        "Do not respond without calling a tool."
+                    )
+                })
+
+        elif response.stop_reason not in ("end_turn", "tool_use"):
+            # Fix applied: any OTHER stop_reason (e.g. "max_tokens" if
+            # a response gets cut off) previously matched neither
+            # branch above, so nothing was appended to messages at
+            # all — the loop would silently resend the exact same
+            # unchanged request and could spin indefinitely on its
+            # own, independent of the empty-tool_results case fixed
+            # above. Logged and given a corrective nudge the same way.
+            if verbose:
+                print(f"  WARNING: unhandled stop_reason "
+                      f"{response.stop_reason!r} — sending corrective "
+                      f"instruction instead of repeating the identical "
+                      f"request unchanged.")
             messages.append({
                 "role"   : "user",
-                "content": tool_results
+                "content": (
+                    f"Your last response ended with stop_reason "
+                    f"'{response.stop_reason}' rather than completing. "
+                    f"Please call a tool or call act_update_board to "
+                    f"finish this cycle."
+                )
             })
 
 
@@ -522,7 +734,7 @@ if __name__ == "__main__":
         print("  $env:ANTHROPIC_API_KEY = 'sk-ant-...'")
         sys.exit(1)
 
-    client = anthropic.Anthropic()
+    client = make_client()
 
     print("=" * 55)
     print("  PHASE 5 - OCCUPANCY MANAGEMENT AGENT")

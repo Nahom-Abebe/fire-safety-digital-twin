@@ -1,22 +1,18 @@
 {
   "scenario_id": "TS-04",
-  "latency_seconds": 50.687,
-  "api_turns": 12,
-  "api_time_seconds": 49.314,
-  "tool_time_seconds": 1.368,
-  "overhead_seconds": 0.005,
-  "tool_count": 14,
+  "latency_seconds": 29.958,
+  "api_turns": 6,
+  "api_time_seconds": 27.595,
+  "tool_time_seconds": 2.356,
+  "overhead_seconds": 0.007,
+  "tool_count": 10,
   "tools_used": [
     "sense_building_state",
     "sense_room",
     "get_regulations",
     "get_regulations",
     "check_compliance",
-    "get_regulations",
-    "get_regulations",
-    "get_regulations",
-    "get_regulations",
-    "get_regulations",
+    "get_adb_violation_context",
     "act_update_sign",
     "act_update_sign",
     "act_set_room_attractiveness",
@@ -24,23 +20,21 @@
   ],
   "directive_clean": {
     "cycle": "Tick 0 - VIOLATION",
-    "rooms": "3-10 (Bedroom) (4/3) FAIL",
-    "adb": "Section 2.43 - Residential care home bedroom occupancy standard (max 3 occupants); Section 3.4\u20133.8 - Protected refuges for wheelchair users with emergency voice communication",
-    "signs": "SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> ALTERNATE",
-    "action": "Room 3-10 exceeds capacity; disabled/wheelchair occupants directed to protected refuge zone in F3 stairway enclosure per ADB Cl.3.4\u20133.8; emergency voice system required; standard stairwell B-L3 marked as inaccessible to mobility-impaired occupants; room attractiveness set to 0.0 to prevent new entries.",
-    "escalate": "Yes - Room 3-10 contains 4 occupants at max capacity 3 (133% occupancy); wheelchair-user accommodation requires refuge area with EVC per ADB Vol2 Section 3.7\u20133.8; building management must verify protected refuge zone presence and EVC system functionality on F3."
+    "rooms": "3-10 (4/3) FAIL",
+    "adb": "Clause 2.43 (Bedroom occupancy); Sections 3.4-3.8 (Wheelchair refuge areas); Table 2.1 (Travel distance accessible escape); Section 2.33 (Care home evacuation)",
+    "signs": "SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> BLOCKED",
+    "action": "Room 3-10 exceeds max occupancy of 3 (currently 4). Updated F3 corridor and stairwell signs to block entry, direct wheelchair user to accessible refuge per ADB Sections 3.4-3.8, and set room attractiveness to 0.0 to prevent further occupant ingress. Stairwell B-L3 marked inaccessible for wheelchair users with directive to proceed to designated refuge.",
+    "escalate": "Yes - Over-capacity bedroom with mobility-impaired occupant and inaccessible primary escape route; facility staff must activate personal emergency evacuation plan per ADB Section 2.33 and ensure wheelchair user reaches protected refuge area immediately."
   },
-  "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 3-10 (Bedroom) (4/3) FAIL\nADB: Section 2.43 - Residential care home bedroom occupancy standard (max 3 occupants); Section 3.4\u20133.8 - Protected refuges for wheelchair users with emergency voice communication\nSIGNS: SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> ALTERNATE\nACTION: Room 3-10 exceeds capacity; disabled/wheelchair occupants directed to protected refuge zone in F3 stairway enclosure per ADB Cl.3.4\u20133.8; emergency voice system required; standard stairwell B-L3 marked as inaccessible to mobility-impaired occupants; room attractiveness set to 0.0 to prevent new entries.\nESCALATE: Yes - Room 3-10 contains 4 occupants at max capacity 3 (133% occupancy); wheelchair-user accommodation requires refuge area with EVC per ADB Vol2 Section 3.7\u20133.8; building management must verify protected refuge zone presence and EVC system functionality on F3.",
+  "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 3-10 (4/3) FAIL\nADB: Clause 2.43 (Bedroom occupancy); Sections 3.4-3.8 (Wheelchair refuge areas); Table 2.1 (Travel distance accessible escape); Section 2.33 (Care home evacuation)\nSIGNS: SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> BLOCKED\nACTION: Room 3-10 exceeds max occupancy of 3 (currently 4). Updated F3 corridor and stairwell signs to block entry, direct wheelchair user to accessible refuge per ADB Sections 3.4-3.8, and set room attractiveness to 0.0 to prevent further occupant ingress. Stairwell B-L3 marked inaccessible for wheelchair users with directive to proceed to designated refuge.\nESCALATE: Yes - Over-capacity bedroom with mobility-impaired occupant and inaccessible primary escape route; facility staff must activate personal emergency evacuation plan per ADB Section 2.33 and ensure wheelchair user reaches protected refuge area immediately.",
   "evaluation": {
-    "passed": false,
+    "passed": true,
     "sequence_valid": true,
-    "citation_valid": false,
+    "citation_valid": true,
     "behavior_valid": true,
-    "failure_reasons": [
-      "Citation Error: Failed to autonomously discover target clause ((3\\.5|3\\.6))."
-    ]
+    "failure_reasons": []
   },
   "sign_updates": 2,
-  "timestamp": "2026-08-27 19:55:24",
+  "timestamp": "2026-08-29 17:15:25",
   "pre_condition": "3-10 over capacity, wheelchair user"
 }

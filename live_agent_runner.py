@@ -28,12 +28,26 @@
 #      wanted; not worth the added complexity of extending the ticks
 #      budget to compensate automatically.
 #
-#   2. Building shell opacity: fix_and_bake.py's baked demos show the
-#      building semi-transparent so cones are visible moving through
-#      rooms from any angle; this live loop never applied the same
-#      material change, leaving the shell fully opaque. Adapted
-#      directly from a standalone make_building_transparent.py script
-#      into _make_building_transparent(), called once during setup.
+#   2. Building shell opacity — REMOVED, not fixed. Three separate
+#      approaches were tried across earlier sessions: a material-based
+#      Alpha replacement (destructive — replaced real wall materials
+#      with no way back, and didn't even render in Blender's default
+#      Solid shading mode, which ignores material Alpha entirely), a
+#      viewport X-Ray toggle (mode-dependent the other way — only
+#      works in Solid/Wireframe shading, invisible in Material
+#      Preview/Rendered), and a per-object display_type='WIRE'
+#      override (worked in every shading mode, but always looks like
+#      wireframe outlines specifically, never a solid or genuinely
+#      transparent look, which wasn't actually the desired result
+#      either). Rather than attempt a fourth approach, this feature
+#      is removed entirely — walls stay in their normal, unmodified
+#      state for the whole session. If you need to see inside the
+#      building while this runs, Blender's own native X-Ray toggle
+#      (Alt+Z in the viewport) or simply orbiting the camera works
+#      fine and needs no scripting at all. _restore_material_damage()
+#      is kept and still runs during setup — it's a one-way cleanup
+#      for any leftover damage from the first (destructive) attempt
+#      in an earlier session, not part of this removed feature.
 
 import sys, os, json, time, argparse, textwrap, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -48,7 +62,7 @@ from bim.viewport_utils import frame_view_on_objects
 from bim.ifc_bridge import test_connection, send_to_blender, _read_result, RESULT_FILE
 from bim.signage import reset_all_signs
 from bim.assembly_point import EVAC_ACTIVE_FLAG
-from agent.agent import run_agent_cycle
+from agent.agent import run_agent_cycle, make_client
 from agent.tool_schemas import TOOLS
 from sensors.building_graph import BUILDING_GRAPH as G
 
@@ -170,14 +184,15 @@ print(f'Cleared {cleared_markers} markers, {cleared_mats} floor mats')
         print(f"Warning: Failed to clear baked animation: {e}")
 
 
-# ── Building shell transparency ─────────────────────────────────────────────
+# ── Material damage cleanup (from a since-removed transparency attempt) ────
 
 def _restore_material_damage():
     """
-    Rollback for the PREVIOUS version of _make_building_transparent(),
-    which destructively replaced every wall/slab object's material
-    with a flat grey 'SHELL_TRANSPARENT' material — and, since Blender
-    stays running as one persistent process across separate script
+    Rollback for the FIRST of three since-removed attempts at building
+    shell transparency (see module docstring, fix 2) — that attempt
+    destructively replaced every wall/slab object's material with a
+    flat grey 'SHELL_TRANSPARENT' material — and, since Blender stays
+    running as one persistent process across separate script
     invocations, that change survived into every later run (including
     phase1_setup.py) with no way back to the original appearance,
     because the original material name was never recorded anywhere.
@@ -215,109 +230,6 @@ print(f'Removed SHELL_TRANSPARENT from {count} objects — '
         print(f"Warning: material rollback failed: {e}")
         return {"error": str(e)}
 
-
-def _make_building_transparent(xray_alpha: float = 0.35):
-    """
-    Fix applied — second attempt, and why the first one likely also
-    failed: material-based transparency (the ORIGINAL version) only
-    renders in Material Preview/Rendered viewport shading, invisible
-    in the default Solid mode. The X-Ray toggle (the PREVIOUS version
-    of this function) is the opposite case — it's a Solid/Wireframe-
-    mode-only feature with zero effect if the viewport happens to be
-    in Material Preview or Rendered shading. Two different shading-
-    mode dependencies, either of which silently does nothing if the
-    guess about current mode is wrong — and there was no way to know
-    which mode the viewport was actually in from outside Blender.
-
-    Now uses obj.display_type = 'WIRE' — a PER-OBJECT property, not a
-    viewport setting. Shows only an object's wireframe outline instead
-    of its solid surface, identically regardless of which shading mode
-    the viewport is in. Removes the entire "which mode is it actually
-    in" guessing that caused both previous attempts to fail silently.
-    X-Ray is also still enabled as a secondary, complementary effect —
-    harmless if display_type alone is sufficient, additive if not.
-
-    Unlike both previous versions, this uses ifc_bridge's RESULT_FILE
-    round trip (the same pattern already proven throughout the rest of
-    this project) instead of a fire-and-forget send_to_blender() call
-    — so if this STILL doesn't work, the printed report says exactly
-    how many objects were found and touched, rather than nothing.
-    """
-    if os.path.exists(RESULT_FILE):
-        os.remove(RESULT_FILE)
-
-    code = f"""
-import bpy, json, traceback
-
-report = {{"status": "error", "message": "did not reach end of script"}}
-try:
-    TRANSPARENT_PREFIXES = (
-        'IfcWall', 'IfcSlab', 'IfcRoof', 'IfcColumn', 'IfcCurtainWall',
-    )
-    KEEP_OPAQUE_PREFIXES = (
-        'IfcDoor', 'IfcWindow', 'IfcStair', 'IfcRailing', 'IfcFurnishing',
-    )
-
-    scanned = 0
-    matched = 0
-    wired   = 0
-    for obj in bpy.data.objects:
-        if obj.type != 'MESH':
-            continue
-        scanned += 1
-        if any(obj.name.startswith(p) for p in KEEP_OPAQUE_PREFIXES):
-            continue
-        if not any(obj.name.startswith(p) for p in TRANSPARENT_PREFIXES):
-            continue
-        matched += 1
-        obj.display_type = 'WIRE'
-        wired += 1
-
-    xray_viewports = 0
-    for area in bpy.context.screen.areas:
-        if area.type == 'VIEW_3D':
-            for space in area.spaces:
-                if space.type == 'VIEW_3D':
-                    space.shading.show_xray  = True
-                    space.shading.xray_alpha = {xray_alpha}
-                    xray_viewports += 1
-            area.tag_redraw()
-
-    report = {{
-        "status"        : "ok",
-        "mesh_objects_scanned"  : scanned,
-        "shell_objects_matched" : matched,
-        "objects_set_to_wire"   : wired,
-        "xray_enabled_viewports": xray_viewports,
-    }}
-except Exception as e:
-    report = {{"status": "error", "message": str(e),
-               "trace": traceback.format_exc()}}
-
-with open(r"{RESULT_FILE}", "w", encoding="utf-8") as f:
-    json.dump(report, f)
-print(f"Transparency: {{report.get('status')}} — "
-      f"{{report.get('objects_set_to_wire', '?')}} objects wireframed, "
-      f"{{report.get('xray_enabled_viewports', '?')}} viewport(s) X-Ray'd")
-"""
-    send_to_blender(code)
-    result = _read_result(timeout=20.0)
-
-    if result.get("status") == "ok":
-        print(f"  Scanned {result['mesh_objects_scanned']} mesh objects, "
-              f"{result['shell_objects_matched']} matched the shell "
-              f"prefixes, {result['objects_set_to_wire']} set to wireframe, "
-              f"{result['xray_enabled_viewports']} viewport(s) X-Ray enabled")
-        if result['shell_objects_matched'] == 0:
-            print(f"  WARNING: zero objects matched IfcWall/IfcSlab/IfcRoof/"
-                  f"IfcColumn/IfcCurtainWall prefixes — either the IFC "
-                  f"import names these objects differently than expected, "
-                  f"or nothing is loaded. Check actual object names in "
-                  f"Blender's outliner against these prefixes.")
-    else:
-        print(f"  Transparency FAILED: {result.get('message', result)}")
-
-    return result
 
 
 # ── Floor colour update ───────────────────────────────────────────────────────
@@ -394,7 +306,7 @@ def run(total_ticks: int = 25,
         print("  $env:ANTHROPIC_API_KEY = 'sk-ant-...'")
         sys.exit(1)
 
-    client = anthropic.Anthropic()
+    client = make_client()
 
     print("=" * 60)
     print("  LIVE OCCUPANCY MANAGEMENT AGENT")
@@ -473,9 +385,6 @@ def run(total_ticks: int = 25,
 
     print("Cleaning up any material damage from an earlier session...")
     _restore_material_damage()
-
-    print("Enabling building shell X-Ray (viewport-only, no material changes)...")
-    _make_building_transparent()
 
     print("Placing occupant markers...")
     result = create_markers(snapshot)

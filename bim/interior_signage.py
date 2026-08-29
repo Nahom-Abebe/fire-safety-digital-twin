@@ -131,7 +131,18 @@ for area in bpy.context.screen.areas:
     if area.type == 'VIEW_3D': area.tag_redraw()
 """
     send_to_blender(code)
-    result = _read_result(timeout=30.0)
+    # Fix applied: this creates 80 separate text objects, each with
+    # its own new material — bpy.ops.object.text_add() called 80
+    # times is genuinely expensive, and 30s may not be enough for
+    # Blender to finish before this gives up waiting. Confirmed
+    # directly: a real phase1_setup.py run showed BOTH "created" and
+    # "status" falling back to "?" (their .get() defaults), which
+    # only happens if the returned dict has neither key — consistent
+    # with a timeout fallback shape, not this function's own
+    # success/error dict (which always has both). bake_animation()
+    # elsewhere in this project does far more work per call and uses
+    # timeout=300.0 for exactly this reason.
+    result = _read_result(timeout=90.0)
 
     if missing_centroid:
         result["warning"] = (
