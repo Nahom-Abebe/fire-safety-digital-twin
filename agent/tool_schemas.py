@@ -1,14 +1,6 @@
 # agent/tool_schemas.py
 # Anthropic API tool definitions for the MCP server functions.
 # These tell Claude what tools are available and how to call them.
-#
-# Fix applied: added sense_rooms and check_compliance_batch — batched
-# versions of sense_room and check_compliance. A real session log
-# showed a 3-room tick making 3 separate sense_room round trips and 3
-# separate check_compliance round trips back to back, each a full
-# model turn, directly inflating cycle latency (confirmed: one tick
-# took 28.394s). The system prompt now instructs the agent to prefer
-# these when more than one room needs checking in the same cycle.
 
 TOOLS = [
     {

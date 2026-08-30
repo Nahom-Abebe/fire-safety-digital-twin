@@ -5,16 +5,6 @@
 #   2. Sign status (BLOCKED sign reduces edge probability to near zero)
 #   3. Room capacity headroom (agents avoid rooms at/over capacity)
 #   4. Global Evacuation Mode (directed movement to emergency exits)
-#
-# Fix applied — move_occupants(), EVACUATION_MODE branch:
-#   get_exit_path() has only ever returned "path_labels" (display
-#   strings) and "path_weight" — never a key called "path". Reading
-#   path_info.get("path", []) silently returned an empty list every
-#   tick, so len(path) > 1 was always False and next_node = node
-#   unconditionally — trigger_global_evacuation() never actually moved
-#   a single occupant, with no error anywhere to reveal it. Fixed by
-#   using the new "path_nodes" key building_graph.py's get_exit_path()
-#   now returns (the real node-id sequence, not display labels).
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,7 +22,7 @@ G = BUILDING_GRAPH
 # Room nodes only (used for initial placement)
 ROOM_NODES = [n for n, d in G.nodes(data=True) if d["node_type"] == "room"]
 
-# ── Simulation state ──────────────────────────────────────────────────────────
+# Simulation state 
 occupancy       = {node: 0 for node in G.nodes}
 active_event    = None
 tick_count      = 0
@@ -44,7 +34,7 @@ EVACUATION_MODE = False
 sign_status     = {}
 
 
-# ── Initialise ────────────────────────────────────────────────────────────────
+#  Initialize 
 
 def initialise_occupants(total: int = 80, seed: int = None):
     global occupancy, active_event, tick_count, event_log, sign_status, EVACUATION_MODE
@@ -61,7 +51,7 @@ def initialise_occupants(total: int = 80, seed: int = None):
     print(f"Initialised {total} occupants across {len(ROOM_NODES)} rooms")
 
 
-# ── Evacuation Controls ───────────────────────────────────────────────────────
+# Evacuation Controls 
 
 def trigger_global_evacuation():
     """Triggers global evacuation mode, routing all occupants to nearest exits."""
@@ -77,7 +67,7 @@ def clear_evacuation():
     print(f"EVACUATION: Evacuation cleared at tick {tick_count}.")
 
 
-# ── Signage feedback ──────────────────────────────────────────────────────────
+# Signage feedback 
 
 def update_sign_status(label: str, status: str):
     """
@@ -103,7 +93,7 @@ def set_room_attractiveness(label: str, value: float):
             break
 
 
-# ── Movement ──────────────────────────────────────────────────────────────────
+# Movement 
 
 def _edge_probability(from_node: int, to_node: int) -> float:
     """
@@ -114,11 +104,9 @@ def _edge_probability(from_node: int, to_node: int) -> float:
     max_occ = get_max_occupancy(to_node)
     current = occupancy.get(to_node, 0)
 
-    # Hard block: room is full (strictly over capacity)
     if data["node_type"] == "room" and current >= max_occ:
         return 0.001
 
-    # Sign blocked: near zero but not impossible (emergency override)
     if data.get("sign_blocked", False):
         return 0.01
 
@@ -140,24 +128,17 @@ def move_occupants():
     new_state = {node: 0 for node in G.nodes}
 
     if EVACUATION_MODE:
-        # Directed evacuation pathing towards exit nodes
         for node, count in occupancy.items():
             if count == 0:
                 continue
 
-            # If occupant is already at an exit node, stay there
             if node in EXIT_IDS:
                 new_state[node] += count
                 continue
 
-            # Find shortest exit path for current node — path_nodes is
-            # the real node-id sequence (see building_graph.py fix).
-            # The old code read a "path" key that never existed, so
-            # this branch previously never advanced anyone.
             path_info = get_exit_path(node)
             path = path_info.get("path_nodes", [])
 
-            # Move 1 step along exit path
             if len(path) > 1:
                 next_node = path[1]
             else:
@@ -165,20 +146,7 @@ def move_occupants():
 
             new_state[next_node] += count
     else:
-        # Normal probabilistic wandering
-        # Exit nodes are NOT special-cased here — an occupant who wanders
-        # onto an exit node keeps moving on subsequent ticks, same as
-        # any other node. The old code force-stayed anyone who landed on
-        # an exit for the rest of the run, silently shrinking the
-        # effective wandering population every tick (7/80 occupants were
-        # permanently trapped by tick 2 in one real run) and directly
-        # contradicting agent_walk.py's own stated design principle:
-        # "Exit nodes are NEVER absorbing — occupants pass through them
-        # like any other node and keep moving." This branch is genuinely
-        # not evacuation mode, so there's no reason for it to behave
-        # like one. The EVACUATION_MODE branch above is intentionally
-        # unchanged — occupants SHOULD stop once they reach an exit
-        # during a real evacuation.
+        
         for node in G.nodes:
             count = occupancy[node]
             if count == 0:
@@ -207,7 +175,7 @@ def move_occupants():
     tick_count += 1
 
 
-# ── Event handling ────────────────────────────────────────────────────────────
+# Event handling 
 
 def trigger_event(node_label: str,
                   event_type: str = "overcapacity") -> dict:
@@ -234,7 +202,7 @@ def clear_event():
     active_event = None
 
 
-# ── Snapshot ──────────────────────────────────────────────────────────────────
+# Snapshot 
 
 def get_sensor_snapshot() -> dict:
     total    = sum(occupancy.values())
@@ -248,17 +216,7 @@ def get_sensor_snapshot() -> dict:
         ntype = G.nodes[node]["node_type"]
         if ntype != "room" or count == 0:
             continue
-        # Automatic alerting is scoped to genuine bedrooms and communal
-        # rooms — is_occupancy_alert_relevant() excludes non_occupiable
-        # rooms (Store, W/C, Storage), circulation spaces (Corridor,
-        # Stair, Lobby, Lift), and single-occupant personal-care rooms
-        # (Bath, Women). Excluding only non_occupiable rooms (the
-        # earlier version of this check) still left Bath rooms — 32 of
-        # them, 8 per floor — dominating the alert stream, since a
-        # single-occupant bathroom getting 2 visitors is structurally
-        # common with 80 occupants wandering 80 rooms. get_room_status()
-        # still reports any specific room's true occupancy/capacity on
-        # direct request regardless of this scoping.
+    
         if not is_occupancy_alert_relevant(node):
             continue
         max_occ = get_max_occupancy(node)

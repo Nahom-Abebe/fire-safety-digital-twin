@@ -1,37 +1,10 @@
 # bim/board.py
 # Building manager's dashboard text panel in Blender.
-#
-# Fix applied — evacuation-mode floor coloring was a silent no-op:
-#
-#   floor_names = ['F0 Ground Floor', ...]
-#   fl_obj = bpy.data.objects.get(fl_name)
-#   if fl_obj: ...
-#
-#   This looked up a SINGLE object literally named "F0 Ground Floor".
-#   Every other floor-coloring function in this project (live_agent_
-#   runner.py's _update_floor_colours(), animation_baker.py's bake
-#   script) colors a floor by iterating every mesh INSIDE a collection
-#   (FLOOR_COLLECTIONS maps floor name -> "IfcBuildingStorey/F0 Ground
-#   Floor" etc.) — a floor is dozens of separate wall/slab/ceiling
-#   objects, not one object named after the floor. bpy.data.objects.
-#   get("F0 Ground Floor") returned None every time, so `if fl_obj:`
-#   was always False and this entire block silently did nothing — if
-#   evacuation_mode ever genuinely triggered, the board text would
-#   correctly say "Status: CRITICAL - EVACUATING" but the floors
-#   themselves would never actually turn red. Now uses the same
-#   collection-based approach as every other floor-coloring function
-#   in the project, so it's consistent and actually works.
-#
-#   Also hardened the text embed against a literal ''' inside an
-#   agent_message prematurely closing the generated Blender code's
-#   triple-quoted string.
 
 from bim.ifc_bridge import send_to_blender
 
-_MAX_LINE = 45   # hard character limit per line
+_MAX_LINE = 45   
 
-# Same collection mapping used by live_agent_runner.py and
-# animation_baker.py — kept identical so all three stay consistent.
 FLOOR_COLLECTIONS = {
     "F0 Ground Floor": "IfcBuildingStorey/F0 Ground Floor",
     "F1 First Floor" : "IfcBuildingStorey/F1 First Floor",
@@ -93,7 +66,6 @@ def update_board(snapshot: dict, agent_message: str = "") -> dict:
     timestamp  = snapshot.get("timestamp", "")
     evac_mode  = snapshot.get("evacuation_mode", False)
 
-    # Floor display order — F0 first, F3 last
     FLOOR_ORDER = [
         "F0 Ground Floor",
         "F1 First Floor",
@@ -101,7 +73,6 @@ def update_board(snapshot: dict, agent_message: str = "") -> dict:
         "F3 Third Floor",
     ]
 
-    # Short floor labels that fit within line limit
     FLOOR_SHORT = {
         "F0 Ground Floor": "F0 Ground",
         "F1 First Floor" : "F1 First",
@@ -138,11 +109,11 @@ def update_board(snapshot: dict, agent_message: str = "") -> dict:
     else:
         lines.append("Status: NORMAL")
 
-    # Agent directive — strictly truncated
+    # Agent directive
     if agent_message:
         lines.append("")
         lines.append("AGENT DIRECTIVE:")
-        # Take first 6 non-empty lines, truncate each
+        
         directive_lines = [
             ln.strip() for ln in agent_message.split("\n")
             if ln.strip()
@@ -150,9 +121,6 @@ def update_board(snapshot: dict, agent_message: str = "") -> dict:
         for dl in directive_lines:
             lines.append(_truncate(dl))
 
-    # Join and sanitise for embedding in Python f-string.
-    # Also strip any literal ''' so a stray one inside agent_message
-    # can't prematurely close the generated code's triple-quoted string.
     text = (
         "\n".join(lines)
         .replace('"', "'")

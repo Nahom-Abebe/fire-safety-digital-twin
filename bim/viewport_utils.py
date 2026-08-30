@@ -85,17 +85,6 @@ with open(r"{RESULT_FILE}","w",encoding="utf-8") as f:
     send_to_blender(code)
     return _read_result(timeout=8.0)
 
-
-# Note: an earlier version of this module had a frame_view_on_room()
-# function here, using view_location/view_distance/view_rotation to
-# frame a room proportional to its size. It was superseded by
-# position_interior_camera() below (a real camera object, needed for
-# split-screen setups where a second viewport must stay untouched)
-# and removed once nothing called it anymore — see fix_and_bake.py's
-# module history for the "weird close up" issue this was built to fix
-# before being superseded in turn.
-
-
 def position_interior_camera(x: float, y: float, z: float,
                              dx: float, dy: float,
                              room_label: str = "") -> dict:

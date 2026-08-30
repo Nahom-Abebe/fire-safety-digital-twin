@@ -104,7 +104,7 @@ def _update_blender_sign_panel(sign_id: str, message: str,
         }
         colour = colours.get(status, colours["ACTIVE"])
 
-        # Truncate for panel display — board line limit
+        # Truncate for panel display
         display_msg = message[:80].replace("'", "")
         display_status = status
 
@@ -133,9 +133,7 @@ for area in bpy.context.screen.areas:
 print('Sign panel updated: {sign_id} -> {status}')
 """)
     except Exception:
-        # Never block the main sign update if Blender panel fails
         pass
-
 
 def reset_all_signs() -> list:
     """

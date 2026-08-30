@@ -1,6 +1,5 @@
 # bim/occupant_markers.py
 # Creates and repositions occupant cone markers in Blender.
-# Uses bmesh (not bpy.ops) to avoid operator context failures.
 
 import json, os, random
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -40,7 +39,7 @@ def _cone(name, r1, r2, depth):
     mat.use_nodes = True
     bsdf = mat.node_tree.nodes.get('Principled BSDF')
     if bsdf:
-        # Default blue — will be overridden by keyframe or obj.color
+        # Default blue 
         bsdf.inputs['Base Color'].default_value    = (0.15, 0.45, 0.90, 1.0)
         bsdf.inputs['Emission Color'].default_value = (0.15, 0.45, 0.90, 1.0)
         bsdf.inputs['Emission Strength'].default_value = 1.5
@@ -48,10 +47,7 @@ def _cone(name, r1, r2, depth):
     return bpy.data.objects.new(name, mesh)
 
 def _cleanup_stray_wheelchair_labels():
-    # Any WheelchairLabel left over from an earlier fix_and_bake.py
-    # TS-04 run is parented to a cone that create_markers() is about
-    # to delete and replace. Remove it here so it doesn't end up
-    # orphaned and floating at a stale world position.
+    
     removed = 0
     for o in list(bpy.data.objects):
         if 'WheelchairLabel' in o.name:
@@ -71,7 +67,7 @@ def _jitter(centroid, seed):
             centroid["z"])
 
 
-# ── Initial placement ─────────────────────────────────────────────────────────
+# Initial placement 
 
 def create_markers(snapshot: dict) -> dict:
     """
@@ -108,13 +104,6 @@ def create_markers(snapshot: dict) -> dict:
     if os.path.exists(RESULT_FILE):
         os.remove(RESULT_FILE)
 
-    # Marker 0 (the first occupant placed) is the baseline wheelchair
-    # marker for Phase 1's static snapshot. Phase 1 has no scenario or
-    # violation context, so there's no "correct" room to place them in —
-    # this is purely to show the marking convention (purple cone + a
-    # label that stays attached as the cone moves) before any scenario
-    # runs. fix_and_bake.py's TS-04 chooses its own marker based on the
-    # actual violation room and is unaffected by this.
     WHEELCHAIR_MARKER_ID = 0
 
     code = _HELPERS + f"""
@@ -216,7 +205,7 @@ for area in bpy.context.screen.areas:
     r["requested"] = len(placements)
     return r
 
-# ── Full reposition (phase2_runner) ───────────────────────────────────────────
+# Full reposition (phase2_runner) 
 
 def reposition_markers(snapshot: dict) -> dict:
     """
@@ -278,7 +267,7 @@ for area in bpy.context.screen.areas:
     return r
 
 
-# ── Fire-and-forget reposition (live_agent_runner) ────────────────────────────
+# Fire-and-forget reposition (live_agent_runner) 
 
 def live_reposition_markers(snapshot: dict) -> None:
     """
@@ -318,7 +307,7 @@ def live_reposition_markers(snapshot: dict) -> None:
 
     placements = []
     mid        = 0
-    seed       = 1000   # different stream from create_markers seed=0
+    seed       = 1000   
 
     for label, count in occupancy.items():
         c = centroids.get(label)
@@ -333,10 +322,8 @@ def live_reposition_markers(snapshot: dict) -> None:
     if not placements:
         return
 
-    # Cap at 80 — one per occupant, no more
     pj = json.dumps(placements[:80])
 
-    # Fire-and-forget: no result file written, no _read_result call
     send_to_blender(_HELPERS + f"""
 import json
 try:

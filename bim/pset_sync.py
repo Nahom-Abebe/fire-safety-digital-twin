@@ -1,7 +1,6 @@
 # bim/pset_sync.py
 # Writes live occupancy data to Pset_FireSafetyStatus for every
 # occupied room in a single batched Blender round trip.
-# Also writes FireAlarmStatus=True to the fire zone space 
 
 import json, os
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -70,8 +69,7 @@ def bulk_update_occupancy_psets(snapshot: dict) -> dict:
             continue
         max_occ = get_max_occupancy(node)
 
-        # Direct comparison — see fix note above. Never gated by
-        # whether this room's type would trigger a live alert.
+
         ratio = (count / max_occ) if max_occ > 0 else 0
         if count > max_occ:
             compliance = "FAIL"

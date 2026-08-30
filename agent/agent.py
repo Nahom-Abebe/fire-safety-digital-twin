@@ -8,42 +8,12 @@
 #       3. Updates the relevant sign to redirect occupants
 #       4. Lowers room attractiveness so new occupants avoid that area
 #       5. Informs the building manager via the board
-#
-#   - The agent responds to what it actually sees in the live simulation
-#
-# Fix applied — real timing telemetry: run_agent_cycle() previously
-# only returned a single flat "latency_seconds" figure, with no way to
-# tell whether that time was spent waiting on the Anthropic API
-# (network + model inference) or executing tools locally (Blender
-# socket calls, ChromaDB queries, IFC writes). A critique of a real
-# session log correctly identified this as a genuine evaluation gap —
-# it also separately claimed "11 roundtrips" and "15-20s of pure
-# network latency", which this fix is what actually lets you check:
-# api_turns counts real client.messages.create() calls (multiple tool
-# calls returned in ONE API response only count as ONE turn, so this
-# is not the same number as tool_count), api_time_seconds is the real
-# measured time spent inside those calls, tool_time_seconds is the
-# sum of each individual tool's own already-tracked duration, and
-# overhead_seconds is whatever's left over (local Python processing,
-# JSON serialization) rather than silently absorbed into either
-# figure. Now the network-bound-vs-code-bound question has a real,
-# measured answer instead of an assumed one either way.
 
 import sys, os, json, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import anthropic
 
-# Anthropic's SDK is httpx-based; without an explicit client-level
-# timeout, a stalled connection can block indefinitely on the raw
-# socket read with nothing to interrupt it. Confirmed directly: a real
-# run's traceback bottomed out in httpcore._backends.sync.read() ->
-# ssl.read(), requiring a manual KeyboardInterrupt to escape — not a
-# theory, the exact call stack of an unbounded blocking socket read.
-# Every caller should build its client via this function rather than
-# calling anthropic.Anthropic() directly, so the timeout is set in one
-# place instead of needing to be duplicated (and potentially missed)
-# in every script that creates a client.
 def make_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(timeout=30.0, max_retries=2)
 
@@ -51,19 +21,10 @@ def make_client() -> anthropic.Anthropic:
 try:
     from anthropic import APITimeoutError, APIConnectionError, APIError
 except ImportError:
-    # Older/newer SDK versions may name these differently — fall back
-    # to catching the base Exception type rather than silently not
-    # catching anything at all if the specific names don't exist.
+ 
     APITimeoutError = APIConnectionError = APIError = Exception
 
 from agent.tool_schemas import TOOLS
-
-# Moved to module scope from inside _call_tool() — code hygiene, not a
-# latency fix. Python caches module imports in sys.modules, so a
-# repeated in-function import is a microsecond-scale dict lookup, not
-# a re-execution of the module; this is not a meaningful contributor
-# to a latency problem measured in seconds. No circular import risk —
-# mcp_server.server does not import from agent.py.
 from mcp_server.server import (
     sense_building_state, sense_room, sense_rooms, advance_tick,
     get_regulations, check_compliance, check_compliance_batch,
@@ -73,7 +34,7 @@ from mcp_server.server import (
     list_signs,
 )
 
-# ── System prompt ─────────────────────────────────────────────────────────────
+# System prompt 
 SYSTEM_PROMPT = """You are an intelligent occupancy management AI agent for a
 UK residential care home Digital Twin. The building is hosted in Blender using
 an IFC model, and your decisions are written back into the IFC property sets in
@@ -252,7 +213,7 @@ CRITICAL RULES:
 """
 
 
-# ── Tool dispatcher ───────────────────────────────────────────────────────────
+# Tool dispatcher 
 
 def _call_tool(tool_name: str, tool_input: dict,
                snapshot: dict = None):
@@ -303,7 +264,7 @@ def _call_tool(tool_name: str, tool_input: dict,
 
     result = handler(tool_input)
 
-    # ── Live board reasoning updates ──────────────────────────────────────
+    # Live board reasoning updates 
     if snapshot is not None:
         try:
             from bim.board import update_board as _board
@@ -415,7 +376,7 @@ def _incomplete_cycle_result(trace: list, api_turns: int,
     }
 
 
-# ── Single Sense-Reason-Act cycle ─────────────────────────────────────────────
+# Single Sense-Reason-Act cycle 
 
 def run_agent_cycle(client: anthropic.Anthropic,
                     trigger_message: str = None,
@@ -440,27 +401,11 @@ def run_agent_cycle(client: anthropic.Anthropic,
     messages = [{"role": "user", "content": user_msg}]
     trace    = []
 
-    # Real timing telemetry — see module docstring fix note.
     api_turns        = 0
     api_time_seconds = 0.0
 
-    # Hard safety cap — confirmed necessary directly: a real cycle ran
-    # 95 API turns / 2505 seconds (41+ minutes) before eventually
-    # completing correctly, with only 11 actual tool calls visible in
-    # that entire span. Leading hypothesis: a turn returning
-    # stop_reason == "tool_use" with NO actual tool_use block in its
-    # content wasn't being detected below, so an empty tool_results
-    # list got sent back as the next user turn, and if the model
-    # responds to an empty result with another empty "tool_use" turn,
-    # nothing in the original loop would ever break that cycle. Root
-    # cause isn't fully confirmed — the loop never logged anything for
-    # a turn with no visible tool call, so those ~84 turns were
-    # invisible even in hindsight — but no real cycle in a system
-    # meant to run repeatedly should ever be allowed to spend unbounded
-    # API turns regardless of what's actually causing it.
     MAX_TURNS = 15
 
-    # Get current snapshot for board reasoning updates
     current_snapshot = None
     try:
         from sensors.sensor_sim import get_sensor_snapshot
@@ -483,33 +428,13 @@ def run_agent_cycle(client: anthropic.Anthropic,
         try:
             response = client.messages.create(
                 model      = "claude-haiku-4-5-20251001",
-                # Fix applied: 1000 was tight enough that a response
-                # combining explanatory text with a multi-room tool_use
-                # JSON payload could hit stop_reason=="max_tokens" —
-                # a value neither of this loop's two original branches
-                # handled at all, meaning the identical request would be
-                # silently resent unchanged. This independently
-                # corroborates the leading hypothesis for a real incident
-                # where one cycle spun 95 turns / 2505 seconds — see the
-                # MAX_TURNS and stop_reason fixes below. Raising this
-                # reduces how often that failure mode can occur at all,
-                # on top of (not instead of) the defensive turn-cap fix.
                 max_tokens = 2048,
                 system     = SYSTEM_PROMPT,
                 tools      = TOOLS,
                 messages   = messages,
             )
         except (APITimeoutError, APIConnectionError, APIError) as e:
-            # Fix applied: the client previously had no timeout at all
-            # (anthropic.Anthropic() default) — confirmed directly, a
-            # real run's traceback showed an unbounded blocking socket
-            # read requiring a manual KeyboardInterrupt to escape.
-            # make_client() now sets a real client-level timeout, so
-            # this exception can actually fire instead of hanging
-            # forever — and now that it can fire, it needs to be
-            # caught and turned into a bounded result rather than
-            # crashing the caller (test_scenarios.py, live_agent_runner.py)
-            # with an unhandled exception.
+      
             api_time_seconds += time.time() - api_call_start
             api_turns        += 1
             print(f"  WARNING: API call failed ({type(e).__name__}: {e}) "
@@ -522,10 +447,6 @@ def run_agent_cycle(client: anthropic.Anthropic,
         api_time_seconds += time.time() - api_call_start
         api_turns        += 1
 
-        # Diagnostic — prints for EVERY turn that produces no visible
-        # tool call, not just ones that do. Directly closes the
-        # visibility gap that made the 95-turn incident's ~84 silent
-        # turns impossible to diagnose after the fact.
         tool_blocks_this_turn = [b for b in response.content if b.type == "tool_use"]
         if verbose and not tool_blocks_this_turn:
             text_preview = " ".join(
@@ -565,12 +486,6 @@ def run_agent_cycle(client: anthropic.Anthropic,
 
             tool_time_seconds = round(sum(t["duration"] for t in trace), 3)
             api_time_rounded   = round(api_time_seconds, 3)
-            # Whatever's left over after accounting for real measured
-            # API time and real measured tool time — local Python
-            # processing, JSON serialization, etc. Reported honestly as
-            # its own figure rather than silently folded into either
-            # of the other two. Should normally be small; a large
-            # value here would itself be worth investigating.
             overhead_seconds = round(
                 max(latency - tool_time_seconds - api_time_rounded, 0.0), 3
             )
@@ -621,16 +536,6 @@ def run_agent_cycle(client: anthropic.Anthropic,
                 tool_results.append({
                     "type"       : "tool_result",
                     "tool_use_id": block.id,
-                    # Reduced from 3000 — every tool result gets
-                    # appended to conversation history and reprocessed
-                    # as context on every subsequent turn, so a long
-                    # cycle's context (and per-turn generation time)
-                    # grows with each tool call. Worth noting: a real
-                    # incident's 95 turns averaged ~26s/turn, notably
-                    # higher than the 3-9s/turn range seen in every
-                    # normal run — consistent with, though not
-                    # confirmed as caused by, growing context length
-                    # over that many turns.
                     "content"    : json.dumps(result, default=str)[:1500],
                 })
 
@@ -640,16 +545,7 @@ def run_agent_cycle(client: anthropic.Anthropic,
                     "content": tool_results
                 })
             else:
-                # Fix applied: stop_reason=="tool_use" with NO actual
-                # tool_use block ever produces an EMPTY tool_results
-                # list here — sending that back as ambiguous, empty
-                # user content is the leading hypothesis for how a
-                # real cycle spun 95 turns / 41 minutes with no
-                # visible progress (see MAX_TURNS fix note above). An
-                # explicit corrective instruction gives the model a
-                # much clearer signal to actually act or finish,
-                # rather than an empty acknowledgment it may just
-                # repeat the same non-response to.
+               
                 messages.append({
                     "role"   : "user",
                     "content": (
@@ -661,13 +557,6 @@ def run_agent_cycle(client: anthropic.Anthropic,
                 })
 
         elif response.stop_reason not in ("end_turn", "tool_use"):
-            # Fix applied: any OTHER stop_reason (e.g. "max_tokens" if
-            # a response gets cut off) previously matched neither
-            # branch above, so nothing was appended to messages at
-            # all — the loop would silently resend the exact same
-            # unchanged request and could spin indefinitely on its
-            # own, independent of the empty-tool_results case fixed
-            # above. Logged and given a corrective nudge the same way.
             if verbose:
                 print(f"  WARNING: unhandled stop_reason "
                       f"{response.stop_reason!r} — sending corrective "
@@ -684,7 +573,7 @@ def run_agent_cycle(client: anthropic.Anthropic,
             })
 
 
-# ── Evaluation wrapper ────────────────────────────────────────────────────────
+# Evaluation wrapper 
 
 def run_evaluation_cycle(client: anthropic.Anthropic,
                           scenario_name: str,
@@ -725,7 +614,7 @@ def run_evaluation_cycle(client: anthropic.Anthropic,
     return result
 
 
-# ── Standalone test ───────────────────────────────────────────────────────────
+# Standalone test 
 
 if __name__ == "__main__":
     api_key = os.environ.get("ANTHROPIC_API_KEY")

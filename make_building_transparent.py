@@ -1,13 +1,13 @@
 # make_building_transparent.py
 # Makes the building shell semi-transparent so occupant markers
 # are visible inside rooms from any camera angle.
-# Run reset_building_opacity.py to restore full opacity.
+
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bim.ifc_bridge import send_to_blender
 
-ALPHA = 0.25  # 0.0 = invisible, 1.0 = fully opaque, 0.25 = semi-transparent
+ALPHA = 0.25  
 
 result = send_to_blender(f"""
 import bpy

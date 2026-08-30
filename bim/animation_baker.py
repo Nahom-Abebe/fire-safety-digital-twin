@@ -1,15 +1,5 @@
 # bim/animation_baker.py
 # Bakes per-agent occupancy management timeline into Blender keyframes.
-#
-# Updates applied:
-#   - bake_animation() accepts blocked_exits, multi_violations, mobility_node
-#   - All three are forwarded to simulate_agent_timeline()
-#   - mobility_marker_id extracted from timeline and used to colour the
-#     wheelchair cone distinctly (purple) in the baked keyframes
-#   - Baseline guard: violation_room=None suppresses IFC write + sign update
-#   - ADB removed from physical sign messages (board only)
-#   - _build_floor_colour_timeline handles None violation_room cleanly
-#   - _build_sign_states_timeline produces clean occupant-facing text
 
 import json, os, random
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -17,13 +7,13 @@ from bim.room_geometry import load_room_centroids
 from sensors.agent_walk import simulate_agent_timeline
 from sensors.building_graph import BUILDING_GRAPH, get_max_occupancy
 
-# ── Marker colours ────────────────────────────────────────────────────────────
+# Marker colours 
 COLOUR_NORMAL      = (0.15, 0.45, 0.90, 1.0)   # blue   — compliant
 COLOUR_REDIRECTED  = (0.95, 0.55, 0.10, 1.0)   # orange — same floor as violation
 COLOUR_OVER        = (0.90, 0.10, 0.10, 1.0)   # red    — in violation room
 COLOUR_WHEELCHAIR  = (0.60, 0.10, 0.80, 1.0)   # purple — mobility constrained
 
-# ── Floor collections ─────────────────────────────────────────────────────────
+# Floor collections 
 FLOOR_COLLECTIONS = {
     "F0 Ground Floor" : "IfcBuildingStorey/F0 Ground Floor",
     "F1 First Floor"  : "IfcBuildingStorey/F1 First Floor",
@@ -55,7 +45,7 @@ BIM_DIR    = os.path.dirname(os.path.abspath(__file__))
 INPUT_FILE = os.path.join(BIM_DIR, "_bake_input.json").replace("\\", "/")
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# Helpers 
 
 def _jitter(centroid, marker_id):
     rng = random.Random(marker_id)
@@ -226,9 +216,6 @@ def _build_sign_states_timeline(timeline: list,
                 violation_start_tick = record["tick"]
                 break
 
-    # Bridges the brief gap between "violation just triggered" and the
-    # alerts list catching up — not applied to the mobility-refuge floor,
-    # which stays open for the whole run regardless of this window.
     MONITOR_TICKS = 8
 
     sign_timeline = []
@@ -247,15 +234,6 @@ def _build_sign_states_timeline(timeline: list,
         frame_signs = {}
         for fl_name, sign_id in FLOOR_SIGNS.items():
 
-            # Priority 1 -- exit obstruction on this floor. Gated by
-            # violation_active so it follows the same rhythm as every
-            # other scenario (green until the violation tick, then
-            # reacts) rather than showing red from frame 0 regardless
-            # of the scripted trigger. Once triggered it stays red for
-            # the rest of the run, same as Priority 2 below -- the
-            # exit really does remain blocked for the whole scenario,
-            # it just shouldn't announce that before anything has
-            # actually happened yet.
             if fl_name in blocked_exit_floors and violation_active:
                 this_dir, alt_dir = _direction(sign_id)
                 if this_dir:
@@ -271,7 +249,6 @@ def _build_sign_states_timeline(timeline: list,
                     ]
                 continue
 
-            # Priority 2 -- mobility refuge floor, permanent once triggered
             if mobility_refuge and fl_name == mobility_floor and violation_active:
                 frame_signs[sign_id] = [
                     "Wheelchair users\n"
@@ -281,8 +258,6 @@ def _build_sign_states_timeline(timeline: list,
                 ]
                 continue
 
-            # Priority 3 -- this floor's own over-capacity room(s), only
-            # once the scripted violation is actually active
             if violation_active:
                 floor_alerts = [a for a in alerts
                                 if a.get("severity") == "OVER"
@@ -309,8 +284,6 @@ def _build_sign_states_timeline(timeline: list,
         sign_timeline.append(frame_signs)
 
     return sign_timeline
-
-
 
 def _build_board_text(snap: dict, violation,
                        violation_room, scripted_rooms: set = None,
@@ -367,16 +340,11 @@ def _build_board_text(snap: dict, violation,
     if violation:
         over_rooms  = [a for a in snap.get("alerts", []) if a["severity"] == "OVER"]
         over_labels = {a["label"] for a in over_rooms}
-
-        # Build the display list: genuinely-over rooms as before, plus
-        # any scripted room that's already resolved but still within
-        # the monitor window — labelled RESOLVING, not OVER, since it
-        # honestly isn't over capacity anymore. See docstring.
         display_entries = [(a, "OVER") for a in over_rooms]
         if in_monitor_window and scripted_rooms:
             for room_label in scripted_rooms:
                 if room_label in over_labels:
-                    continue   # already included above, still genuinely over
+                    continue   
                 current = snap.get("occupancy", {}).get(room_label, 0)
                 node = next((n for n, d in BUILDING_GRAPH.nodes(data=True)
                             if d["label"] == room_label), None)
@@ -388,15 +356,6 @@ def _build_board_text(snap: dict, violation,
                     "RESOLVING"
                 ))
 
-        # Scripted-scenario room(s) always shown FIRST. Bedrooms make
-        # up 36 of the 44 alert-relevant rooms (82%) — with 80
-        # occupants wandering ~80 rooms, an incidental bedroom hitting
-        # 4+ is common by pure chance, unrelated to this scenario's
-        # actual point. Without this, an incidental bedroom alert
-        # (Clause 2.43) could sit ahead of or beside the scenario's
-        # OWN specific citation (e.g. TS-02's Table 2.1), making the
-        # board look like it "always" cites 2.43 even when the
-        # scenario-specific fix is working correctly underneath.
         def _is_scripted(entry):
             a, _ = entry
             return bool(scripted_rooms) and a["label"] in scripted_rooms
@@ -406,10 +365,6 @@ def _build_board_text(snap: dict, violation,
             lines.append(f"OVERCAPACITY ({len(over_rooms)}):")
             for a, status in display_entries[:3]:
                 is_scripted = _is_scripted((a, status))
-                # Scenario's own intended clause wins for its scripted
-                # violation room(s); the room-type classifier is the
-                # honest fallback for any other, incidental alert.
-                # See _build_board_text() docstring.
                 if is_scripted and scenario_adb_ref:
                     adb_ref = scenario_adb_ref
                 else:
@@ -427,23 +382,12 @@ def _build_board_text(snap: dict, violation,
     else:
         lines.append("Status: NORMAL — all rooms compliant")
 
-    # Mobility escalation alert — only ever appears once the tracked
-    # occupant has genuinely reached and settled at their floor's refuge
-    # point (sensors/agent_walk.py only sets at_refuge True when the
-    # scenario explicitly enables refuge-seeking, i.e. TS-04). Routine
-    # "currently in room X" chatter is intentionally not shown for
-    # every scenario — this is a manager-facing alert, not a tracker.
     ms = snap.get("mobility_status")
     if ms and ms.get("at_refuge"):
         lines.append("")
         lines.append("ALERT: Wheelchair user awaiting")
         lines.append(f"assistance — {ms['floor']} refuge point")
 
-    # TS-02: note blocked exit on board — only once the violation has
-    # actually triggered. blocked_exits is structurally populated from
-    # tick 0 (the exit really is blocked from the start of the walk),
-    # but announcing it before anything has happened yet is the same
-    # premature-disclosure problem the corridor signs had.
     if violation and snap.get("blocked_exits"):
         lines.append(f"Exit blocked: {snap['blocked_exits']}")
 
@@ -471,7 +415,7 @@ def _write_compliance_pset(violation_room: str):
         return {"error": str(e)}
 
 
-# ── Main bake function ────────────────────────────────────────────────────────
+# Main bake function 
 
 def bake_animation(total_occupants: int = 80,
                    total_ticks: int = 25,
@@ -534,7 +478,7 @@ def bake_animation(total_occupants: int = 80,
     violation_floor = (label_to_floor.get(violation_room, "")
                        if not is_baseline else "")
 
-    # Extract mobility_marker_id from the first timeline record
+    # Extract mobility_marker_id 
     mobility_marker_id = timeline[0].get("mobility_marker_id") if timeline else None
 
     violation_start_tick = None
@@ -546,11 +490,6 @@ def bake_animation(total_occupants: int = 80,
 
     MONITOR_TICKS = 8
 
-    # Scripted violation rooms — this scenario's own violation_room
-    # plus any multi_violations rooms. Used by _build_board_text() to
-    # decide when the scenario's own intended clause (scenario_adb_ref)
-    # should override the generic room-type classifier — see that
-    # function's docstring.
     scripted_rooms = set()
     if not is_baseline and violation_room:
         scripted_rooms.add(violation_room)
@@ -559,13 +498,10 @@ def bake_animation(total_occupants: int = 80,
         if mv_room:
             scripted_rooms.add(mv_room)
 
-    # Diagnostic — confirms exactly what reached this function, so a
-    # mismatch between the console's scenario summary and the actual
-    # board citation can be traced directly instead of guessed at.
     print(f"  Board citation override: scripted_rooms={scripted_rooms}, "
           f"scenario_adb_ref={scenario_adb_ref!r}")
 
-    # ── Occupant marker keyframes ─────────────────────────────────────────
+    # Occupant marker keyframes 
     print("  Building occupant keyframes...")
     marker_keys = {i: [] for i in range(total_occupants)}
     board_texts = []
@@ -600,7 +536,7 @@ def bake_animation(total_occupants: int = 80,
             centroid = resolve(node_id)
             x, y, z  = _jitter(centroid, marker_id)
 
-            # Wheelchair marker (TS-04) — always purple
+            # Wheelchair marker (TS-04) 
             if marker_id == mobility_marker_id and mobility_node is not None:
                 colour = COLOUR_WHEELCHAIR
             elif label in over_rooms or (in_monitor_window and label == violation_room):
@@ -618,7 +554,7 @@ def bake_animation(total_occupants: int = 80,
                               scripted_rooms, scenario_adb_ref,
                               in_monitor_window))
 
-    # ── Floor & sign timelines ────────────────────────────────────────────
+    # Floor & sign timelines 
     print("  Building floor colour & sign state keyframes...")
     floor_keys  = _build_floor_colour_timeline(
         timeline, frames_per_tick, None if is_baseline else violation_room)
@@ -627,34 +563,12 @@ def bake_animation(total_occupants: int = 80,
         blocked_exits   = blocked_exits or [],
         mobility_node   = mobility_node if not is_baseline else None,
         mobility_refuge = mobility_refuge if not is_baseline else False)
-
-    # ── IFC Pset + sign updates — baseline guard ──────────────────────────
-    # _update_signs_for_violation() (via bim/signage.py) is deliberately
-    # NOT called here. It writes directly to the same SignPanel_/SignText_
-    # Blender objects the live sign_states handler above controls every
-    # frame — a one-time write that gets overwritten within moments by
-    # the handler's own tick-0 (green) state, and along the way briefly
-    # sets the wrong colour (it hardcodes "ALTERNATE"/amber, while the
-    # live handler correctly computes red for a violation floor). It also
-    # tries to feed back into sensors/sensor_sim.py, a module unrelated
-    # to sensors/agent_walk.py — the one actually driving this bake — so
-    # that call silently does nothing here. bim/signage.py itself is left
-    # untouched; it's the correct integration for the live agent pathway
-    # (real-time IFC write + live sim feedback + panel update, no
-    # competing handler to race against), just not needed for a baked
-    # demo scenario where the live handler already covers everything.
+    
     if is_baseline:
         print("  Baseline scenario — IFC Pset write suppressed")
         print("  Corridor sign updates suppressed")
     else:
-        # Fixed: this only ever wrote the PRIMARY violation_room's
-        # ComplianceStatus to the IFC file. For a multi-violation
-        # scenario like TS-03, additional rooms (multi_violations)
-        # were correctly flagged in the live simulation — the board
-        # and signs reflect them — but never got their own IFC Pset
-        # write at all. The IFC record would silently omit them even
-        # though the console log and viewport both show them as
-        # genuine violations. Now writes once per violating room.
+ 
         all_violation_rooms = [violation_room] + [
             mv["room"] for mv in (multi_violations or [])
         ]
@@ -667,7 +581,7 @@ def bake_animation(total_occupants: int = 80,
 
     total_frames = total_ticks * frames_per_tick
 
-    # ── Write payload to disk ─────────────────────────────────────────────
+    # Write payload to disk 
     with open(INPUT_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "marker_keys"       : marker_keys,
@@ -684,7 +598,7 @@ def bake_animation(total_occupants: int = 80,
     if os.path.exists(RESULT_FILE):
         os.remove(RESULT_FILE)
 
-    # ── Blender bake script ───────────────────────────────────────────────
+    # Blender bake script 
     code_template = """
 import bpy, bmesh, json, traceback
 

@@ -1,89 +1,5 @@
 # rag/retriever.py
 # Retrieves relevant ADB Vol2 passages from ChromaDB.
-# Includes targeted care-home-specific queries that reliably hit:
-#   - p.37  Section 2.33 "Residential care homes — General provisions"
-#   - p.39  Clause 2.43  "Bedrooms should not contain more than one bed"
-#   - p.25  Table 2.1    "Travel distance limits"
-#   - p.17  Table B1     "Purpose Group 2a classification"
-#   - p.221 Index        "Residential care homes 2.37"
-#
-# Fixes applied:
-#
-#   1. retrieve_regulations() was defined TWICE. Python silently kept
-#      only the second definition, so the caching implementation right
-#      above it — _REGULATION_CACHE and all — was dead code that never
-#      ran. Every call re-embedded the query and re-hit ChromaDB even
-#      for an identical repeated query within the same tick. Merged
-#      into one definition; caching now actually executes.
-#
-#   2. retrieve_care_home_regulations() accepted current_occ/max_occ
-#      but never referenced them anywhere in the function body — a
-#      room at 4/3 and 40/3 retrieved identically. Removed from this
-#      function's signature; get_adb_context() (which DOES use them,
-#      for its header text) is unaffected.
-#
-#   3. The violation_type == "bedroom" branch could never fire through
-#      the real call path — get_adb_context() only ever sets
-#      violation_type to "pre_emptive" or room_type's own value, never
-#      the literal string "bedroom". Removed the dead branch; bedroom
-#      coverage already comes from the room_type == "room" branch,
-#      which does fire in practice (confirmed in the self-test output).
-#
-#   4. query_keys were built generic-first (general_provisions,
-#      purpose_group) then room-type-specific keys appended after, and
-#      truncated to ordered[:3] before running. For any corridor/lobby
-#      scenario this meant travel_distance — the single most relevant
-#      concept for that room type — was silently dropped every time,
-#      purely due to list position. Confirmed directly in the module's
-#      own self-test: p.25 (Table 2.1, travel distance) and p.37
-#      (Section 2.33, general provisions) never appeared once across
-#      four examples specifically built to surface them. Query order
-#      is now room-type-specific keys FIRST, generic context keys
-#      last, and the cap raised from 3 to 4 so both specific and
-#      generic queries usually survive rather than only ever the
-#      generic ones.
-#
-#   5. Text snippets truncated by raw character count, visibly cutting
-#      mid-word in the module's own output ("separate bed", "editi").
-#      Now truncates at the last word boundary before the limit.
-#
-#   6. Two further issues, confirmed directly against real test runs:
-#      near-duplicate chunks from the same page split at different
-#      boundaries both surviving as if genuinely distinct sources
-#      (p.25 appearing twice from one passage), and index/table-of-
-#      contents chunks (e.g. p.221 — a list of topics and page
-#      numbers) ranking ahead of substantive clause text purely
-#      because they're short and semantically broad. Both fixed via
-#      _dedup_and_rank() (page-level dedup + _looks_like_index()
-#      distance penalty) — and, since retrieve_regulations() is also
-#      called directly by the agent's get_regulations tool separately
-#      from the care-home-specific multi-query path, it now fetches a
-#      larger candidate pool from ChromaDB and applies the same
-#      dedup/ranking itself, so a direct call gets the same quality
-#      guarantees rather than only the care-home wrapper benefiting.
-#
-#   7. Metadata-based topic filtering (build_rag.py now tags every
-#      chunk with a lightweight keyword-derived "topics" field) was
-#      stored but never used for retrieval — this wires it in.
-#      ChromaDB's native `where` filtering needs scalar metadata
-#      fields, not the comma-joined multi-value string topics are
-#      stored as, so this isn't a ChromaDB-side filter — it's a
-#      Python-side distance BOOST (the inverse of _INDEX_PENALTY)
-#      applied during the same _dedup_and_rank() pass, using the
-#      metadata that's already returned with each candidate. A chunk
-#      whose stored topics include the query's expected topic ranks
-#      ahead of an equally-close chunk that doesn't. For
-#      retrieve_care_home_regulations()'s per-strategy queries the
-#      expected topic is known exactly (the _CARE_HOME_QUERIES key IS
-#      a _TOPIC_KEYWORDS category) and passed explicitly. For a
-#      direct retrieve_regulations() call with no topic hint (e.g. the
-#      agent's get_regulations tool, or a raw call), the topic is
-#      inferred from the query text itself using the same keyword
-#      matching build_rag.py uses to tag chunks — weaker than an
-#      explicit hint, but still better than no topic awareness at
-#      all. Requires chunks rebuilt with the current build_rag.py to
-#      have any effect — a chunk with no "topics" metadata (from an
-#      older vector store) simply gets no boost, never an error.
 
 import os, json
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
@@ -105,12 +21,6 @@ _client     = None
 _collection = None
 _model      = None
 
-# In-memory cache — persists for one script run. Also loaded from and
-# written to disk (fix below) so a REPEATED run of live_agent_runner.py
-# (e.g. rehearsing a demo multiple times) can reuse ADB query results
-# computed by an EARLIER run, rather than every fresh process paying
-# the full embed+ChromaDB-query cost again for the exact same queries
-# — the in-memory cache alone only helped within a single run.
 _CACHE_FILE = os.path.join(os.path.dirname(__file__), "_query_cache.json")
 
 
@@ -134,10 +44,6 @@ def _save_disk_cache():
 
 _REGULATION_CACHE = _load_disk_cache()
 
-# Kept in sync with build_rag.py's _TOPIC_KEYWORDS — same six
-# categories, same keyword lists. Duplicated rather than imported
-# (build_rag.py is a root-level script, not part of the rag package)
-# so retriever.py has no fragile cross-directory import dependency.
 _TOPIC_KEYWORDS = {
     "travel_distance"    : ["travel distance", "table 2.1", "dead end"],
     "bedroom_occupancy"  : ["bedroom", "single or double bed"],
@@ -150,9 +56,7 @@ _TOPIC_KEYWORDS = {
     "purpose_group"      : ["purpose group", "sleeping accommodation"],
 }
 
-_TOPIC_BOOST = 0.3   # subtracted from distance for a topic match —
-                     # the inverse of _INDEX_PENALTY
-
+_TOPIC_BOOST = 0.3   
 
 def _infer_query_topics(text: str) -> set:
     """Best-effort topic guess from free query text, for a
@@ -262,13 +166,6 @@ def _looks_like_index(text: str) -> bool:
                         / max(len(lines), 1))
     return short_line_ratio > 0.5
 
-
-# Added to an index-like chunk's distance before final ranking — not
-# excluded outright (a poor source is still better than none if
-# nothing substantive was found), but pushed behind genuine clause
-# text of similar relevance. Distances observed in this collection
-# run roughly 0.4-0.95, so this is enough to demote an index chunk
-# below most real content without being an absolute exclusion.
 _INDEX_PENALTY = 0.5
 
 
@@ -316,7 +213,7 @@ def _dedup_and_rank(candidates: list, n: int,
     return deduped[:n]
 
 
-# ── Core retrieval ────────────────────────────────────────────────────────────
+# Core retrieval 
 
 def retrieve_regulations(query: str, n: int = 3,
                          boost_topic: str = None) -> list:
@@ -376,28 +273,14 @@ def retrieve_regulations(query: str, n: int = 3,
     passages = _dedup_and_rank(candidates, n, boost_topics=boost_topics)
 
     _REGULATION_CACHE[cache_key] = passages
-    _save_disk_cache()   # write-through, only reached on a genuine miss
+    _save_disk_cache()   
     return passages
 
 
-# ── Care-home-specific retrieval ──────────────────────────────────────────────
+# Care-home-specific retrieval 
 
-# These queries are tuned from the test_rag.py output to reliably hit
-# the exact care-home sections confirmed present in your ADB document.
 _CARE_HOME_QUERIES = {
 
-    # Fixed: rewritten from a guessed phrasing ("means of escape
-    # corridor general provisions") that shared almost no vocabulary
-    # with the actual clause text, to one built from the real chunk
-    # confirmed present in the vector store (p.37, chunk 193, verified
-    # via diagnose_rag_233.py — a direct substring check bypassing
-    # semantic ranking entirely). The old query's "means of escape
-    # corridor" framing was semantically much closer to the travel-
-    # distance/horizontal-escape passages than to 2.33 itself, which
-    # is actually about fire safety strategy depending on building
-    # design, furnishing, staffing, and resident dependency level —
-    # not escape routes directly. That mismatch is why this query
-    # never surfaced the real clause across every prior test run.
     "general_provisions": (
         "fire safety strategy building design furnished staffed "
         "managed level of dependency residents care home"
@@ -514,14 +397,8 @@ def retrieve_care_home_regulations(violation_type: str = "overcrowding",
     elif violation_type == "corridor":
         query_keys += ["horizontal_escape"]
 
-    # Generic context — always relevant, but never at the expense of
-    # the room-type-specific queries above, so added last. Only one
-    # generic key now, not two — see fix 9.
     query_keys += ["general_provisions"]
 
-    # Remove duplicates while preserving priority order. The first
-    # entry is always the single most room-type-specific key by
-    # construction — used as the final-merge boost topic below.
     seen = set()
     ordered = []
     for k in query_keys:
@@ -531,9 +408,6 @@ def retrieve_care_home_regulations(violation_type: str = "overcrowding",
 
     primary_topic = ordered[0]
 
-    # Fewer distinct queries now run for some room types (e.g. "room"
-    # runs only 2) — fetch more per query so the candidate pool stays
-    # a healthy size for dedup/ranking to work with either way.
     n_per_query = max(2, 6 // max(len(ordered), 1))
 
     all_results = []
@@ -544,10 +418,6 @@ def retrieve_care_home_regulations(violation_type: str = "overcrowding",
             r["query_strategy"] = key
             all_results.append(r)
 
-    # Final merge boosts the room-type's own primary topic — see
-    # fix 8. This is the stage that actually decides the visible
-    # output order, unlike the per-query boosts above which only
-    # affected each query's own internal top-n before merging.
     return _dedup_and_rank(all_results, 4, boost_topics={primary_topic})
 
 
@@ -598,7 +468,7 @@ def get_adb_context(room_label: str,
     return header + "\n---\n".join(parts)
 
 
-# ── Self-test ─────────────────────────────────────────────────────────────────
+# Self-test 
 
 if __name__ == "__main__":
     print("=" * 60)

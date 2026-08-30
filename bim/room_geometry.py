@@ -5,7 +5,7 @@ from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
 BIM_DIR       = os.path.dirname(os.path.abspath(__file__))
 CENTROID_FILE = os.path.join(BIM_DIR, "room_centroids.json")
 
-# Graph label → IFC room number (Name field on IfcSpace in Blender)
+# Graph label → IFC room number 
 GRAPH_TO_IFC = {
     "0-1":"029","0-2":"028","0-3":"027","0-4":"002","0-5":"007",
     "0-6":"005","0-7":"003","0-8":"008","0-9":"009","0-10":"011",

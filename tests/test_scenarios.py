@@ -3,77 +3,6 @@
 # evaluated programmatically. Companion to fix_and_bake.py's --scenario
 # runs, which are the visual/baked demonstration of the same five
 # scenarios — this file is the evaluator, that one is the visualizer.
-#
-# Fixes applied — all found by cross-checking against fix_and_bake.py's
-# own SCENARIOS dict, which is imported directly below rather than
-# duplicated, specifically so the two files can't drift apart again:
-#
-#   1. Wrong rooms tested entirely. TS-01 forced occupancy onto room
-#      "0-20" — confirmed, from earlier verification work on this
-#      project, to be a real Corridor (max_occ 10), not a bedroom.
-#      Two consequences: sensor_sim.py deliberately excludes
-#      circulation rooms (Corridor/Stair/Lobby) from ever appearing in
-#      alerts at all (an alarm-fatigue fix), so the forced violation
-#      may never even register; and GROUND_TRUTH_CITATIONS expected
-#      Clause 2.43 (a bedroom-only citation) regardless. TS-03's
-#      "0-20"/"1-20"/"2-20" rooms follow the same numbering pattern and
-#      are very likely corridors too. Every room reference now comes
-#      directly from fix_and_bake.py's own SCENARIOS dict — the same
-#      verified bedrooms (1-1, 1-2, 3-1, 3-2, 3-10) its baked demos use.
-#
-#   2. Citation patterns hand-duplicated a second time, already found
-#      not matching what fix_and_bake.py actually cites (e.g. TS-02's
-#      old pattern accepted any "Section 3.x" when the scenario's real
-#      citation is Table 2.1; TS-04's old pattern accepted the 2.33-2.36
-#      general-provisions range when the scenario is specifically about
-#      Sections 3.5-3.6 wheelchair refuge). GROUND_TRUTH_CITATIONS is
-#      now DERIVED from each scenario's real adb_ref string in
-#      fix_and_bake.SCENARIOS, not hand-maintained — if that citation
-#      is ever changed there again, this file's expectations update
-#      automatically instead of silently going stale a second time.
-#
-#   3. TS-05 (baseline) required a citation to be found at all — but a
-#      correctly-idle agent has nothing to cite; the system prompt's
-#      own idle-case instruction is just "All rooms within safe
-#      occupancy limits - no action required", with no clause
-#      reference. A correctly-behaving agent on this scenario would
-#      have FAILED the citation check by design. Citation check is now
-#      skipped entirely for baseline scenarios (empty adb_ref).
-#
-#   4. Sequence assertion only recognised the tool name
-#      "check_compliance" — but the system prompt (for latency)
-#      explicitly tells the agent to prefer check_compliance_batch
-#      whenever more than one room needs checking, which TS-03 always
-#      does. A correct agent using the batched tool made this check
-#      pass VACUOUSLY (sequence_valid defaults True when
-#      "check_compliance" never appears at all, whether or not the
-#      real ordering was actually respected). Now recognises both tool
-#      names and checks against whichever was actually used.
-#
-#   5. sign_updates counted every act_update_sign CALL, not every
-#      successful one — the same bug found and fixed in
-#      live_agent_runner.py. A call with a bad sign_id fails silently
-#      inside bim.signage.update_sign() but still counted toward
-#      "behavior_valid" passing. Now checks each trace entry's actual
-#      result for an "error" key.
-#
-#   6. Occupancy values forced into rooms were hand-picked constants
-#      (e.g. 15) tuned for an older, since-replaced area-based capacity
-#      model. Now computed as get_max_occupancy(node) + 1 at run time —
-#      always a genuine minimal violation regardless of what a room's
-#      real capacity is, so this can't go stale again the same way.
-#
-#   7. TS-03's docstring described a per-floor scan across three
-#      different floors; fix_and_bake.py's actual TS-03 is two rooms
-#      on the SAME floor (F3) violating simultaneously. Retargeted to
-#      match — same scenario, same story, both files now agree on
-#      what "TS-03" means rather than two different narratives sharing
-#      one label.
-#
-#   8. TS-04 forced occupancy across five rooms (3-1 through 3-5) and
-#      placed the wheelchair narrative in 3-1; fix_and_bake.py's TS-04
-#      is a single room (3-10), with 3-10 also being the mobility_node.
-#      Retargeted to match.
 
 import sys, os, json, time, re, argparse, statistics
 from typing import Dict, List, Any, Tuple
@@ -117,7 +46,7 @@ def _prewarm_pipeline():
 
     print("Pre-warming MCP tool imports...")
     try:
-        import mcp_server.server  # noqa: F401
+        import mcp_server.server  
         print("  MCP tools ready")
     except Exception as e:
         print(f"  Warning: MCP pre-warm failed (non-fatal): {e}")
@@ -134,7 +63,7 @@ def _prewarm_pipeline():
         print(f"  Warning: API pre-warm failed (non-fatal): {e}")
 
 
-# ── Ground truth, derived from fix_and_bake.py's own scenario data ──────────
+# Ground truth 
 
 def _node_for_label(label: str):
     return next((n for n, d in G.nodes(data=True) if d.get("label") == label), None)
@@ -193,16 +122,6 @@ def _citation_matches(directive_raw: str, target_numbers: list) -> bool:
                 continue
     return False
 
-# Appended to every non-baseline trigger message — see fix note in
-# module docstring. A real run of TS-01 showed the agent correctly
-# NAMING three incidental WARNING-tier rooms on its board alongside
-# the one forced FAIL room, then taking action on only the forced
-# one. evaluate_scenario_run() doesn't fail this (it only requires at
-# least one sign update), but it's a real, worth-fixing gap between
-# what the agent notices and what it acts on. The original singular
-# "identify THE overcrowded room" framing likely steered this — now
-# explicit that every alerted room should get the response its own
-# severity calls for, not just the scenario's specifically forced one.
 _ACT_ON_ALL_ROOMS = (
     " Take the appropriate action for EVERY alerted room shown in the "
     "sensor snapshot, not only the primary one described above — this "
@@ -212,9 +131,6 @@ _ACT_ON_ALL_ROOMS = (
     "that have reached FAIL."
 )
 
-# Real max_occ per verified room, resolved once at import time. Used to
-# compute a genuine minimal violation (max_occ + 1) rather than a
-# hand-picked constant that can go stale if capacities change — see fix 6.
 _TS01_ROOM = BAKE_SCENARIOS["TS-01"]["violation_room"]                    # "1-1"
 _TS02_ROOM = BAKE_SCENARIOS["TS-02"]["violation_room"]                    # "1-2"
 _TS02_BLOCKED_EXITS = BAKE_SCENARIOS["TS-02"].get("blocked_exits", [])    # ["EXIT-1"]
@@ -223,7 +139,7 @@ _TS03_ROOM_B = BAKE_SCENARIOS["TS-03"]["multi_violations"][0]["room"]     # "3-2
 _TS04_ROOM = BAKE_SCENARIOS["TS-04"]["violation_room"]                    # "3-10"
 
 
-# ── Directive Parser ──────────────────────────────────────────────────────────
+# Directive Parser 
 
 def _clean_directive(raw: str) -> dict:
     """
@@ -276,8 +192,7 @@ def _clean_directive(raw: str) -> dict:
         "note": "Verbose format parsed",
     }
 
-
-# ── Programmatic Assertion Engine ────────────────────────────────────────────
+# Programmatic Assertion Engine 
 
 def evaluate_scenario_run(scenario_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -349,8 +264,7 @@ def evaluate_scenario_run(scenario_id: str, result: Dict[str, Any]) -> Dict[str,
         "failure_reasons": failure_reasons
     }
 
-
-# ── Clean Formatted Terminal Logger ──────────────────────────────────────────
+# Clean Formatted Terminal Logger 
 
 def print_structured_board(cleaned: dict):
     """Prints a spacious, uncongested representation of the Agent Directive Board."""
@@ -369,14 +283,6 @@ def log_result(scenario_id: str, result: dict, extra: dict = None) -> dict:
     log = {
         "scenario_id": scenario_id,
         "latency_seconds": result["latency_seconds"],
-        # Real timing breakdown — see agent.py's run_agent_cycle() fix
-        # note. api_turns is real client.messages.create() call count
-        # (NOT the same as tool_count — several tool calls returned in
-        # one API response are still one turn), api_time_seconds is
-        # measured time spent in those calls, tool_time_seconds is the
-        # measured sum of each tool's own execution time, and
-        # overhead_seconds is whatever's left over rather than folded
-        # silently into either figure.
         "api_turns": result.get("api_turns"),
         "api_time_seconds": result.get("api_time_seconds"),
         "tool_time_seconds": result.get("tool_time_seconds"),
@@ -429,7 +335,7 @@ def log_result(scenario_id: str, result: dict, extra: dict = None) -> dict:
     return log
 
 
-# ── TS-01 — Single Room Congestion ────────────────────────────────────────────
+# TS-01 — Single Room Congestion 
 
 def TS01_single_room_congestion():
     """
@@ -470,7 +376,7 @@ def TS01_single_room_congestion():
     return log_result("TS-01", result, {"pre_condition": f"{len(overs)} violations"})
 
 
-# ── TS-02 — Exit Obstruction ──────────────────────────────────────────────────
+# TS-02 — Exit Obstruction 
 
 def TS02_exit_obstruction():
     """
@@ -518,7 +424,7 @@ def TS02_exit_obstruction():
     return log_result("TS-02", result, {"pre_condition": f"{_TS02_BLOCKED_EXITS} blocked"})
 
 
-# ── TS-03 — Multi-Room Congestion ─────────────────────────────────────────────
+# TS-03 — Multi-Room Congestion 
 
 def TS03_multi_room_congestion():
     """
@@ -559,7 +465,7 @@ def TS03_multi_room_congestion():
     return log_result("TS-03", result, {"pre_condition": f"{len(overs)} violations"})
 
 
-# ── TS-04 — Mobility-Constrained Routing ─────────────────────────────────────
+# TS-04 — Mobility-Constrained Routing 
 
 def TS04_mobility_constrained():
     """
@@ -599,7 +505,7 @@ def TS04_mobility_constrained():
     return log_result("TS-04", result, {"pre_condition": f"{_TS04_ROOM} over capacity, wheelchair user"})
 
 
-# ── TS-05 — Baseline ──────────────────────────────────────────────────────────
+# TS-05 — Baseline 
 
 def TS05_baseline():
     """
@@ -634,7 +540,7 @@ def TS05_baseline():
     return log_result("TS-05", result, {"pre_condition": f"{len(overs)} OVER, {len(warns)} WARNING"})
 
 
-# ── Multi-Trial Runner & Statistical Synthesis ───────────────────────────────
+# Multi-Trial Runner & Statistical Synthesis 
 
 def run_scenarios_with_trials(scenarios_to_run: List[str], num_trials: int = 1):
     scenario_map = {
@@ -697,8 +603,7 @@ def run_scenarios_with_trials(scenarios_to_run: List[str], num_trials: int = 1):
         json.dump(summary_report, f, indent=2, default=str)
     print(f"  Full analytical summary written to: {summary_path}\n")
 
-
-# ── CLI Entry Point ───────────────────────────────────────────────────────────
+# CLI Entry Point 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluation Test Harness")

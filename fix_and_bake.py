@@ -1,24 +1,4 @@
 # fix_and_bake.py
-# Clears conflicting materials, bakes occupancy management animation,
-# then drives it as a TRUE digital twin — every visible signal (board text,
-# the four primary corridor signs, and the scenario-specific extra signs)
-# is derived from the live per-tick simulation output, not from fixed
-# strings pinned to a chosen frame number.
-#
-# Fix applied: --jump only ever set the frame number — it had no
-# knowledge of which scenario was baked or which room violated, so it
-# could only give the same whole-building framing every time, and the
-# printed "Tip" command didn't even include --scenario, meaning a
-# copy-pasted jump after running e.g. TS-03 would silently use the
-# "default" scenario's data instead. --jump now also accepts
-# --scenario and, unless --no-zoom is passed, automatically finds the
-# EXACT occupant cones sitting inside the violating room(s) at that
-# tick (via a fresh, identical re-run of the same deterministic
-# simulation — the same trick _build_extra_sign_schedule() already
-# uses for the reactive signs) and zooms the viewport onto exactly
-# those cones. Works for every scenario, including TS-03's two
-# simultaneous rooms (both rooms' cones get selected together, so the
-# view naturally widens to fit both without extra logic).
 
 import sys, os, time, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,7 +16,7 @@ from sensors.building_graph import BUILDING_GRAPH as G
 # ── Scenario definitions ──────────────────────────────────────────────────────
 # These declare CONFIGURATION for the simulation (which room, which exits
 # are blocked, which extra rooms fail, which occupant is mobility
-# constrained) — not pre-written outcomes. Everything the twin shows is
+# constrained). Everything the twin shows is
 # computed from this configuration at run time.
 SCENARIOS = {
     "default": {
@@ -55,9 +35,6 @@ SCENARIOS = {
     "TS-01": {
         "description"     : "Single room congestion — F1 bedroom 1-1 overcrowded",
         "violation_tick"  : 4,
-        # Was "0-4" — that graph node's real IFC space is the Lounge
-        # (max_occ 130), not a bedroom. diagnose_room_mapping.py
-        # confirmed 1-1 (IFC "113") is a genuine, floor-matched bedroom.
         "violation_room"  : "1-1",
         "ticks"           : 20,
         "seed"            : 1,
@@ -66,23 +43,12 @@ SCENARIOS = {
         "multi_violations": [],
         "mobility_node"   : None,
         "extra_sign_kind" : None,
-        # The earlier "0-20 Lounge (15/130) false positive" claim had no
-        # basis in the actual data — 0-20's real IFC space is a Corridor
-        # (max_occ 10), not a Lounge, and nothing in the codebase computes
-        # 130 for it. 0-20 was also never seeded with occupants in this
-        # bake, so that scenario state was never actually simulated.
-        # Removed until GRAPH_TO_IFC's room mapping is verified and the
-        # scenario can reference a room whose real identity is confirmed.
         "note"            : None,
     },
 
     "TS-02": {
         "description"     : "Exit obstruction — north exit blocked, occupants route around it",
         "violation_tick"  : 5,
-        # Was "0-9" — that graph node's real IFC space is Dining
-        # (max_occ 15), not a bedroom. Repointed to a verified bedroom
-        # for consistency, though the visible sign behaviour is driven
-        # by blocked_exits regardless of which room is chosen here.
         "violation_room"  : "1-2",
         "ticks"           : 20,
         "seed"            : 2,
@@ -90,12 +56,6 @@ SCENARIOS = {
         "blocked_exits"   : ["EXIT-1"],
         "multi_violations": [],
         "mobility_node"   : None,
-        # SIGN_F0_CORRIDOR_S was removed from interior_signage.py — it
-        # was placed at a mismapped IFC space (a small side lobby, not
-        # a real second corridor) and rendered confusingly close to
-        # the north sign. The primary north sign's own redirect text
-        # ("North Corridor BLOCKED / Use South Exit") already conveys
-        # the reroute, so TS-02 no longer needs a second sign object.
         "extra_sign_kind" : None,
         "note"            : "EXIT-1 blocked from tick 0 in the simulation — occupants genuinely avoid it",
     },
@@ -108,13 +68,8 @@ SCENARIOS = {
         "seed"            : 3,
         "adb_ref"         : "ADB Clause 2.43 — bedroom occupancy | Section 2.33 — care home",
         "blocked_exits"   : [],
-        # Was "3-14" — that graph node's real IFC space is a Bath
-        # (max_occ 1), not a bedroom. Repointed to 3-2, a verified
-        # floor-matched bedroom.
         "multi_violations": [{"room": "3-2", "tick": 4}],
         "mobility_node"   : None,
-        # Zone-clear signs on F0/F1/F2 report the REAL per-tick alert
-        # state of each floor, not a fixed "all clear" string.
         "extra_sign_kind" : "zone_clear_other_floors",
         "note"            : "Rooms 3-1 + 3-2 both overcrowded simultaneously — modelled in the walk itself",
     },
@@ -125,24 +80,11 @@ SCENARIOS = {
         "violation_room"  : "3-10",
         "ticks"           : 25,
         "seed"            : 7,
-        # Was "3.5-3.6" — widened after checking a real source: a UK
-        # government report on means of escape for disabled people
-        # directly cites "Clause 3.4c" as governing how many refuge
-        # spaces a building needs relative to its wheelchair users —
-        # confirming 3.4 is genuinely part of the same refuge-
-        # provisions cluster as 3.5-3.6, not a different topic.
-        # Confirmed necessary directly: the live agent twice cited
-        # "Section 3.4" specifically (not a 3.5-3.6 range) for this
-        # exact scenario, and the narrower ground truth incorrectly
-        # failed a citation that real ADB text supports.
         "adb_ref"         : "ADB Sections 3.4-3.6 — wheelchair refuge provisions",
         "blocked_exits"   : [],
         "multi_violations": [],
         "mobility_node"   : "3-10",
         "mobility_refuge" : True,
-        # Stairwell sign reports whether the tracked mobility marker
-        # currently needs to avoid stairs — tied to the real violation
-        # state, not a pinned frame.
         "extra_sign_kind" : "stairwell",
         "extra_sign_id"   : "SIGN_F3_STAIR",
         "note"            : "Wheelchair marker's stair-avoidance is a live bias in the walk, not a scripted freeze",
@@ -178,7 +120,7 @@ def _is_baseline(sc):
     return sc["violation_tick"] >= 999 or sc["violation_room"] is None
 
 
-# ── Blender helpers ───────────────────────────────────────────────────────────
+# Blender helpers 
 
 def _clear_materials_and_set_viewport():
     send_to_blender("""
@@ -448,14 +390,6 @@ def _cones_in_rooms_at_tick(sc: dict, total_occupants: int, tick: int,
         if n in room_nodes
     ]
 
-
-# ── Reactive extra-sign schedule ───────────────────────────────────────────────
-# Re-runs the SAME deterministic simulation used for the bake (identical
-# seed and parameters => identical result), so we can read real per-tick
-# alerts and derive extra-sign state from them.
-# This is the mechanism that makes the extra signs (south exit,
-# zone-clear, stairwell) reactive rather than pinned text.
-
 def _build_extra_sign_schedule(sc: dict, total_occupants: int,
                                effective_mobility_node: str = None,
                                mobility_refuge: bool = False) -> list:
@@ -496,11 +430,6 @@ def _build_extra_sign_schedule(sc: dict, total_occupants: int,
         entry = {}
 
         if kind == "opposite_exit":
-            # South exit becomes the active route once the violation
-            # triggers — gated the same way as the primary north sign,
-            # so both signs change together at the scripted tick rather
-            # than the south sign announcing "OPEN / primary route"
-            # from frame 0 before anything has actually happened.
             sign_id = sc["extra_sign_id"]
             tick    = record["tick"]
             if sc.get("blocked_exits") and tick >= sc["violation_tick"]:
@@ -515,7 +444,7 @@ def _build_extra_sign_schedule(sc: dict, total_occupants: int,
             v_floor = label_to_floor.get(sc["violation_room"], "")
             for fl_name, sign_id in FLOOR_SIGNS.items():
                 if fl_name == v_floor:
-                    continue  # primary sign already owned by animation_baker
+                    continue  
                 floor_alerts = [a for a in alerts
                                 if a.get("severity") == "OVER"
                                 and label_to_floor.get(a.get("label", "")) == fl_name]
@@ -596,7 +525,7 @@ for area in bpy.context.screen.areas:
         print("\nStopped by user")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# Main 
 
 def main(scenario: str = "default",
          frames_per_tick: int = 24,
@@ -617,15 +546,6 @@ def main(scenario: str = "default",
     n_tick   = sc["ticks"]
     total_occupants = 40 if baseline else 80
 
-    # Every non-baseline scenario tracks a mobility-constrained occupant.
-    # A scenario can name a specific room via "mobility_node"; otherwise
-    # it defaults to that scenario's own violation_room — no new hardcoded
-    # room names needed for TS-01/02/03.
-    #
-    # mobility_refuge is a SEPARATE flag from presence: only TS-04 sets it
-    # True. When False the marker still avoids stairs (a standing
-    # accessibility bias) but does not seek or settle at a refuge point,
-    # and the board never shows the escalation alert for it.
     effective_mobility_node = None
     mobility_refuge         = False
     if not baseline:
@@ -686,8 +606,7 @@ def main(scenario: str = "default",
     print("  Board + 4 primary corridor signs: live from baked per-tick data")
     print("=" * 60)
 
-    # Identify (not script) the wheelchair cone — present in every
-    # non-baseline scenario now
+    # 
     if has_wc:
         mobility_id = result.get("mobility_marker_id")
         if mobility_id is not None:
@@ -696,10 +615,6 @@ def main(scenario: str = "default",
         else:
             print("\nWARNING: mobility_marker_id missing from bake result")
 
-    # Extra signs — computed from a fresh, identical re-run of the same
-    # deterministic simulation (same seed, same effective_mobility_node,
-    # same mobility_refuge as the real bake, so the two runs match
-    # exactly), not written once and left static
     extra_schedule = []
     if not baseline and sc.get("extra_sign_kind"):
         print(f"\nComputing reactive extra-sign schedule "
@@ -721,7 +636,7 @@ def main(scenario: str = "default",
               f"--jump {v_frame} --fps {frames_per_tick}")
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# Entry point 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -760,27 +675,12 @@ if __name__ == "__main__":
             for mv in sc.get("multi_violations", []):
                 rooms_to_zoom.append(mv["room"])
 
-            # Searches the WHOLE timeline for the tick that actually
-            # has the most occupants in the room, rather than assuming
-            # violation_tick is the peak — see _find_peak_occupancy_tick()
-            # docstring. Confirmed necessary through two rounds of
-            # testing: assuming violation_tick was the peak found zero
-            # cones across three scenarios; a forward-only search
-            # window found zero for TS-01 and only 1 for TS-03/TS-04.
             peak_tick, zoom_names = _find_peak_occupancy_tick(
                 sc, total_occupants,
                 effective_mobility_node, mobility_refuge, rooms_to_zoom)
 
             if zoom_names:
                 target_frame = peak_tick * args.fps
-
-                # Room-size-proportional framing, not cone-count-
-                # dependent — see position_interior_camera() docstring
-                # for why view_selected() on 1-2 small cones produced
-                # an unusably tight close-up ("weird close up which is
-                # very difficult to see"). Averages centroids across
-                # all rooms being zoomed so a multi-room case like
-                # TS-03 frames both together.
                 centroids      = load_room_centroids()
                 room_centroids = [centroids[r] for r in rooms_to_zoom
                                   if r in centroids]
@@ -800,10 +700,6 @@ if __name__ == "__main__":
         print(f"Jumping to frame {target_frame} (scenario: {args.scenario})...")
         _jump_to_frame(target_frame)
         if zoomed_room:
-            # Only wireframe geometry ABOVE the target room's own
-            # floor — the room's own floor and everything below stays
-            # fully solid, for spatial grounding. See
-            # set_upper_floor_occlusion() docstring.
             set_upper_floor_occlusion(above_z=avg_z, hide=True)
             position_interior_camera(
                 avg_x, avg_y, avg_z, size, size,

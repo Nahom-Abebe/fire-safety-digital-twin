@@ -1,47 +1,6 @@
 # sensors/building_graph.py
-# Building topology derived from BuildingGraphHosp.html (Peter Lawrence)
 # Nodes: rooms, corridors, stairs, exits, assembly
 # Edges: doors (weight=1), stairs (weight=20), outdoor (weight=10)
-#
-# Fix applied — get_max_occupancy():
-#   Previously computed capacity purely from area_m2 using a flat
-#   6 m2/person density applied to every room type uniformly. A
-#   diagnostic cross-check against the real IFC data (bim_query.SPACES,
-#   via room_geometry.GRAPH_TO_IFC) showed this was wrong for nearly
-#   every room except bedrooms, which happened to coincidentally land
-#   close to the real number: the real Lounge is max_occ=130, the
-#   formula gave 7; Dining is really 15, the formula gave 3; a Store
-#   room is really 0 (non-occupiable), the formula gave 3. Every
-#   scenario's over-capacity alerts were being computed against these
-#   wrong numbers.
-#
-#   Now uses the REAL max_occ from bim_query.SPACES for every "room"
-#   node (all 80 are covered by GRAPH_TO_IFC), falling back to the old
-#   area-based formula only for node types GRAPH_TO_IFC doesn't cover
-#   at all (stairs, exits, lobbies, assembly). A floor of
-#   max(1, real_max_occ) is applied rather than using a real 0
-#   literally — six F0 service rooms (W/C, three Store rooms, Storage)
-#   are marked non-occupiable with a real max_occ of 0, and using that
-#   literally would make any single incidental random-walk visit to
-#   one of them an automatic, permanent alert unrelated to any
-#   scenario's actual narrative. A floor of 1 keeps them correctly
-#   very-low-capacity without that noise. The more rigorous fix would
-#   be excluding non_occupiable rooms from alert generation entirely
-#   in sensors/agent_walk.py — not implemented here.
-#
-#   This makes get_max_occupancy() only work correctly if
-#   global_ids_v2.json (loaded by bim.bim_query) is present and valid —
-#   a new dependency this module didn't have before. It also now
-#   imports from bim/, which it previously never did.
-#
-#   Known unresolved: three graph nodes (0-13, 0-15, 0-16) map via
-#   GRAPH_TO_IFC to real IFC spaces on the WRONG floor (F1/F3/F2
-#   respectively, despite being labelled F0 rooms here) — see
-#   diagnose_room_mapping.py. Their real max_occ is still used (all
-#   three are non-occupiable Store rooms, so floor=1 applies), but
-#   their extracted GEOMETRY (via room_geometry.py) is still wrong —
-#   unrelated to this fix, unresolved, flagged for anyone placing a
-#   marker or sign near those specific nodes.
 
 import networkx as nx
 from bim.room_geometry import GRAPH_TO_IFC
@@ -147,7 +106,7 @@ NODES = [
     (92,"B-L1","F1 First Floor","stair",18.60),
     (93,"B-L2","F2 Second Floor","stair",18.60),
     (94,"B-L3","F3 Third Floor","stair",18.54),
-    # Secondary stairwell lobbies (Space-4 to Space-7 in Peter's graph)
+    # Secondary stairwell lobbies 
     (97,"SP4","F0 Ground Floor","lobby",13.50),
     (98,"SP5","F1 First Floor","lobby",13.51),
     (99,"SP6","F2 Second Floor","lobby",13.47),
@@ -168,7 +127,7 @@ EXIT_IDS  = {102, 103, 104, 105}
 STAIR_IDS = {91, 92, 93, 94, 101}
 ASSEMBLY_ID = 999
 
-# ── Edges ─────────────────────────────────────────────────────────────────────
+# Edges 
 DOOR_EDGES = [
     # Ground floor rooms → main corridor 0-A
     (1,21),(2,21),(3,21),(4,21),(5,21),(6,21),(7,21),(8,21),
@@ -229,9 +188,6 @@ def build_graph() -> nx.Graph:
 
 BUILDING_GRAPH = build_graph()
 
-# Graph label -> real IFC space dict, for get_max_occupancy(). Built once
-# at import time from GRAPH_TO_IFC (room_geometry.py) and SPACES
-# (bim_query.py) rather than looked up fresh on every call.
 _IFC_NAME_TO_SPACE = {s.get("name"): s for s in SPACES.values()}
 _LABEL_TO_REAL_SPACE = {
     label: _IFC_NAME_TO_SPACE[ifc_name]
@@ -274,12 +230,6 @@ def is_non_occupiable(node_id: int) -> bool:
     real  = _LABEL_TO_REAL_SPACE.get(label)
     return bool(real and real.get("non_occupiable", False))
 
-
-# Real long_name values (case-insensitive) treated as single-occupant
-# personal-care rooms, not a fire-safety occupancy-management concern
-# the way a crowded bedroom or communal lounge is. Not covered by
-# non_occupiable — these are genuinely marked occupiable in the real
-# data, just not what this system's auto-alerting exists to catch.
 _PERSONAL_CARE_ROOM_TYPES = {"bath", "women"}
 
 

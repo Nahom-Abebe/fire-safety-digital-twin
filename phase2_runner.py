@@ -5,27 +5,6 @@
 # - Sign updates feed back into movement probabilities next tick
 # - IFC Psets updated every tick (live Digital Twin)
 # - Bidirectional: AI decisions change occupant behaviour
-#
-# Fix applied — sign logic rewritten from room-level to floor-level:
-#
-#   The old version used a one-shot "handled_rooms" set: once a room
-#   triggered an alert, its sign got blocked and NEVER reverted, even
-#   after the room's occupancy genuinely cleared. By tick 25 of a real
-#   run, 45 of 80 rooms had permanently exhausted their one-shot
-#   trigger, and every floor's sign was stuck showing whichever room
-#   happened to be the LAST one processed in dict order — sometimes a
-#   trivial WARNING silently overwriting a more serious OVER alert
-#   from the same tick, sometimes a message from 20 ticks earlier for
-#   a room that had long since recovered.
-#
-#   Now: every tick, alerts are grouped by FLOOR. Each floor's sign
-#   shows its single MOST SEVERE currently-active alert (OVER beats
-#   WARNING, higher ratio breaks ties within the same severity) — not
-#   whichever room was processed last. A floor with zero active
-#   alerts gets its sign explicitly reset to ACTIVE/green. A sign is
-#   only re-written when its state actually changes tick to tick, to
-#   avoid a redundant Blender round trip every single tick regardless
-#   of whether anything changed.
 
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -43,11 +22,10 @@ from bim.ifc_bridge import test_connection
 
 # ── Configuration ──────────────────────────────────────────────────────────
 TOTAL_OCCUPANTS = 80
-TICK_INTERVAL   = 3.0    # seconds per tick (report scope: "few seconds")
+TICK_INTERVAL   = 3.0    
 TOTAL_TICKS     = 25
-WARN_RATIO      = 0.80   # pre-emptive warning at 80% capacity (Peter criterion 3)
+WARN_RATIO      = 0.80   
 
-# Sign IDs matched to floors — used for pre-emptive redirections
 FLOOR_SIGNS = {
     "F0 Ground Floor": "SIGN_F0_CORRIDOR_N",
     "F1 First Floor" : "SIGN_F1_CORRIDOR",
@@ -73,7 +51,6 @@ def run():
     reset_all_signs()
 
     # ── 3. Initialise simulation ───────────────────────────────────────
-    # seed=42 ensures reproducible results for evaluation (Section 3.6.1)
     initialise_occupants(TOTAL_OCCUPANTS, seed=42)
     snapshot = get_sensor_snapshot()
 
@@ -98,8 +75,7 @@ def run():
           f"circulation, personal-care, and non-occupiable rooms excluded")
     print("-" * 60)
 
-    # Current displayed state per sign, so we only write when it
-    # actually changes rather than every single tick regardless.
+ 
     sign_state    = {sign_id: "ACTIVE" for sign_id in FLOOR_SIGNS.values()}
     rooms_flagged = set()   # informational only — every room ever alerted
     action_count  = 0       # counts actual sign STATE CHANGES, both ways
@@ -189,7 +165,7 @@ def run():
 
         time.sleep(TICK_INTERVAL)
 
-    # ── Final summary ──────────────────────────────────────────────────
+    # Final summary 
     print("\n" + "=" * 60)
     print("  PHASE 2 COMPLETE")
     print("=" * 60)

@@ -2,39 +2,6 @@
 # Phase 1 — Digital Twin Foundation
 # Verifies connection, graph, Psets, markers, board,
 # room labels and corridor sign panels.
-#
-# Fixes applied:
-#   1. Pset round-trip test now writes a value guaranteed to differ
-#      from whatever is currently stored, verifies the change actually
-#      took effect, then restores a sensible baseline. The previous
-#      version wrote 15 and read back 15 regardless of whether the
-#      write did anything, because a prior run had often already left
-#      the value at 15 — proving nothing.
-#   2. Room label / corridor sign steps now surface a WARNING with the
-#      actual failure message whenever status != "ok", instead of
-#      only printing whatever status came back with no follow-up.
-#   3. The centroid count line now breaks 88 down into "80 rooms + 8
-#      corridors" against the graph's own counts, instead of an
-#      unqualified "88/88 rooms mapped" that implied 88 rooms when
-#      the graph itself reports 80.
-#   4. Fixed step counter: TOTAL_STEPS is a single constant referenced
-#      by every step header, so the denominator can't drift ([1/7]
-#      through [7/7] then jumping to [8/8], [9/9] as it did before).
-#   5. The exit-path check and the exit-count assert were bundled
-#      under one ambiguous "PASS" that actually only validated exit
-#      count. They're now two separate, explicitly labelled checks.
-#      The printed path_weight is explicitly labelled as graph
-#      movement-cost units (door=1, stair=20, outdoor=10 — relative
-#      traversal-difficulty weights used by the occupancy simulation),
-#      not metres, so it's not misread as an ADB Table 2.1 18m
-#      travel-distance compliance result.
-#   6. The manager-panel description here was describing an old blind
-#      "redirect to assembly" behaviour that manager_panel.py itself
-#      no longer does — it now computes a real per-occupant exit path
-#      (room -> corridor -> exit -> assembly). Updated to match.
-#   7. Summary block only claims room labels / corridor signs were
-#      created if they actually were, based on the real step outcomes,
-#      rather than always listing them as delivered.
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -81,7 +48,7 @@ def main():
     print("  PHASE 1 — DIGITAL TWIN FOUNDATION")
     print("=" * 55)
 
-    # Track real outcomes for an honest summary block at the end
+    # Track real outcomes for summary block at the end
     labels_ok = False
     signs_ok  = False
 
@@ -105,8 +72,8 @@ def main():
 
     # Worst-case room by graph movement-cost weight. These weights
     # (door=1, stair=20, outdoor=10) are relative traversal-difficulty
-    # values used to bias the occupancy simulation's random walk — NOT
-    # metre distances — so this validates graph connectivity and
+    # values used to bias the occupancy simulation's random walk 
+    # so this validates graph connectivity and
     # identifies the hardest-to-reach room, not ADB Table 2.1 travel
     # distance compliance (that lives in the live agent's ADB checks).
     path = get_exit_path(67)
@@ -128,11 +95,7 @@ def main():
         before_val = before.get("properties", {}).get("CurrentOccupancy")
         print(f"  Before: CurrentOccupancy={before_val}")
 
-        # Write a value guaranteed to differ from whatever is currently
-        # stored — writing the same value the field already holds
-        # (the previous version always wrote 15, which was often
-        # already there from an earlier run) cannot distinguish a
-        # working write from a silently failed one.
+        # Write a value guaranteed to differ from whatever is currentlystored
         test_val = 999 if before_val != 999 else 888
         update_ifc_pset_properties(gid, "Pset_FireSafetyStatus", {
             "CurrentOccupancy": test_val,
@@ -146,8 +109,6 @@ def main():
         write_verified = (mid_val == test_val)
         print(f"  {'PASS — write verified' if write_verified else 'FAIL — value did not change to test value'}")
 
-        # Restore a sensible baseline regardless of pass/fail, so later
-        # scenarios aren't left with a stray test value.
         update_ifc_pset_properties(gid, "Pset_FireSafetyStatus", {
             "CurrentOccupancy": 15,
             "ComplianceStatus": "PASS",
@@ -166,11 +127,7 @@ def main():
         return
     centroids = load_room_centroids()
 
-    # Break the count down against the graph's own room/corridor
-    # counts instead of one unqualified "N/N rooms mapped" line —
-    # GRAPH_TO_IFC covers both room AND corridor labels (80 + 8 = 88),
-    # while the graph's own room count is 80. Both numbers are
-    # correct; they were just never shown to mean different things.
+  
     graph_room_labels     = {d["label"] for _, d in G.nodes(data=True)
                              if d["node_type"] == "room"}
     graph_corridor_labels = {d["label"] for _, d in G.nodes(data=True)

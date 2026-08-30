@@ -1,34 +1,6 @@
 # bim/assembly_point.py
 # Creates and manages the assembly point marker outside the building.
-#
-# Fixes applied:
-#
-#   1. compute_evacuation_paths() was replaced with
-#      compute_signage_aware_evacuation_paths() — a real networkx
-#      shortest-path per occupant's actual room, not a flattened
-#      3-hop guess. Any node whose sign is currently marked
-#      sign_blocked (the SAME graph property sensor_sim.py's normal-
-#      operation movement already reacts to, set by
-#      update_sign_status()) is heavily penalised in the path search,
-#      so an evacuating occupant naturally avoids whatever exit the
-#      signage is currently telling them to avoid — using a signal
-#      that's already real and already meaningful elsewhere in the
-#      project, not a new rule invented just for escalation.
-#
-#   2. animate_evacuation_via_paths() used STEP_SIZE=0.12 as a
-#      fraction of remaining distance per step — proportional
-#      stepping, which covers most of the journey in the first few
-#      steps then barely moves for the rest, making movement nearly
-#      invisible. This is the exact bug already diagnosed and fixed
-#      with fixed-speed stepping inside manager_panel.py's own
-#      escalate handler — but this function wasn't being called by
-#      anything at the time, so the fix never made it back here. Now
-#      uses the same fixed-speed (0.35m/step) approach.
-#
-#   3. Paths are now written to a temp file and read by the Blender
-#      script, matching the pattern already proven in
-#      manager_panel.py, rather than embedding a potentially large
-#      JSON payload directly inside an f-string.
+
 
 import os, json, random
 from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
@@ -41,27 +13,10 @@ REDIRECT_COUNT = 5
 
 BIM_DIR          = os.path.dirname(os.path.abspath(__file__))
 EVAC_PATHS_FILE  = os.path.join(BIM_DIR, "_full_evac_paths.json").replace("\\", "/")
-
-# Presence of this file means "an ESCALATE evacuation is currently in
-# progress" — a signal readable across the process boundary, the same
-# way EVAC_PATHS_FILE already is. Written when _escalate() starts,
-# removed when evacuation completes AND when _reset() is pressed.
-#
-# Exists because manager_panel.py's ESCALATE runs inside Blender's own
-# process, entirely separate from any external script (fix_and_bake.py,
-# live_agent_runner.py) that might ALSO be actively sending cone
-# position updates to Blender at the same time. fix_and_bake.py's own
-# interference (baked keyframes) can be cleared directly from inside
-# Blender — but live_agent_runner.py's interference is an ONGOING
-# external process calling live_reposition_markers() every tick with
-# zero awareness evacuation is happening, and Blender-side code has no
-# way to reach into a separate running Python process and tell it to
-# stop. The external script has to check for and respect this flag
-# itself — see live_agent_runner.py's own tick loop for the read side.
 EVAC_ACTIVE_FLAG = os.path.join(BIM_DIR, "_evacuation_active.flag").replace("\\", "/")
 
 
-# ── Create assembly point marker ──────────────────────────────────────────────
+# Create assembly point marker 
 
 def create_assembly_point() -> dict:
     """
@@ -135,7 +90,7 @@ print('Assembly point:', report.get('status'))
     return _read_result(timeout=20.0)
 
 
-# ── Signage-aware evacuation paths ─────────────────────────────────────────────
+# Signage-aware evacuation paths 
 
 def _resolve_occupant_rooms_from_blender(centroids: dict) -> dict:
     """
@@ -185,17 +140,7 @@ def _resolve_occupant_rooms_from_blender(centroids: dict) -> dict:
     for obj in bpy.data.objects:
         if not obj.name.startswith("Occupant_"):
             continue
-        # Skip any cone already marked evacuated/at-refuge by a
-        # previous ESCALATE press — see animate_evacuation_via_paths()
-        # for where this flag gets set, and _reset() in
-        # manager_panel.py for where it gets cleared. Without this,
-        # pressing ESCALATE a second time recomputed a path for every
-        # cone including ones already standing outside at the
-        # assembly point — since this function only knows about ROOM
-        # centroids, an already-evacuated cone's position got matched
-        # to whatever real room was geometrically nearest to the
-        # assembly point, and the resulting path walked it back INTO
-        # the building before re-evacuating.
+       
         if obj.get("fs_evacuated", False):
             continue
 
@@ -204,10 +149,6 @@ def _resolve_occupant_rooms_from_blender(centroids: dict) -> dict:
 
         best_label, best_dist = None, None
         for label, c in label_positions:
-            # Full 3D distance, not just X/Y — see fix note above.
-            # Centroid z is stored at floor level; cones sit at
-            # z + 0.85 (person-height offset, same convention
-            # occupant_markers.py uses when placing them).
             d = ((c["x"] - x) ** 2 + (c["y"] - y) ** 2
                  + ((c["z"] + 0.85) - z) ** 2)
             if best_dist is None or d < best_dist:
@@ -322,8 +263,6 @@ def compute_signage_aware_evacuation_paths(centroids: dict,
     import networkx as nx
     from sensors.building_graph import BUILDING_GRAPH as G, ASSEMBLY_ID
 
-    # Real per-floor elevations (IFC floors data) — used only to give
-    # a stair/lobby waypoint the correct height, not a fabricated one.
     FLOOR_ELEVATIONS = {
         "F0 Ground Floor": 0.0,
         "F1 First Floor" : 3.0,
@@ -342,7 +281,7 @@ def compute_signage_aware_evacuation_paths(centroids: dict,
     def _signage_weight(u, v, edge_data):
         base = edge_data.get("weight", 1)
         if G.nodes[v].get("sign_blocked", False):
-            return base * 50   # strongly discouraged, not physically impossible
+            return base * 50  
         return base
 
     def _waypoints_for(node_path):
@@ -558,7 +497,7 @@ print(f'Signage-aware evacuation started for {{len(all_paths)}} cones')
 """)
 
 
-# ── Agent sign response (partial redirect) ────────────────────────────────────
+# Agent sign response (partial redirect) 
 
 def redirect_cones_via_sign(affected_floor: str,
                              violation_room: str,
@@ -663,9 +602,6 @@ def _redirect_step():
 bpy.app.timers.register(_redirect_step, first_interval=0.1)
 print(f'Sign response: {{len(paths)}} cones redirecting to nearest exit')
 """)
-
-
-# ── Legacy fire-and-forget (kept for compatibility) ───────────────────────────
 
 def move_cones_to_assembly(marker_ids: list) -> None:
     """

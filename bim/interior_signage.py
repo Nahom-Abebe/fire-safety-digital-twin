@@ -8,26 +8,6 @@ from bim.ifc_bridge import send_to_blender, _read_result, RESULT_FILE
 from bim.room_geometry import load_room_centroids
 from sensors.building_graph import BUILDING_GRAPH
 
-# The complete, authoritative list of sign IDs that actually have a
-# real Blender panel (SignPanel_/SignText_ objects) — must match
-# SIGN_POSITIONS' keys inside create_corridor_signs() exactly.
-#
-# Fix applied: bim_query.py's SIGNS/get_all_signs() is loaded straight
-# from global_ids_v2.json — the full IFC-derived sign registry, a
-# completely separate set from the 5 signs this file actually renders
-# a visual panel for. mcp_server/server.py's sense_building_state()
-# was exposing get_all_signs()'s FULL list to the agent as
-# available_sign_ids, meaning a sign that exists in the IFC data but
-# was never given a Blender panel here was presented as equally valid
-# to choose. Confirmed directly: the agent picked "SIGN_F0_EXIT_N" and
-# "SIGN_F0_EXIT_S" — both wrote successfully to their IFC Pset (no
-# error, correctly counted as genuine successes) but had no matching
-# panel object for _update_blender_sign_panel() to find, so nothing
-# changed on screen — a real write with zero visible effect. This
-# constant is now imported by mcp_server/server.py to scope
-# available_sign_ids (and list_signs()'s output) down to only signs
-# that can actually be seen to change, so the agent can never again
-# choose one that succeeds "for real" but shows nothing.
 VISUAL_SIGN_IDS = [
     "SIGN_F0_CORRIDOR_N",
     "SIGN_F1_CORRIDOR",
@@ -60,15 +40,14 @@ def create_room_labels() -> dict:
         if c is None:
             missing_centroid.append(label)
             continue
-        # Use a richer name only if the centroid actually carries one —
-        # never required, so one missing field can't zero out the batch.
+   
         extra = c.get("ifc_long_name") or c.get("room_type")
         text  = f"{label}\n{extra}" if extra else label
         labels.append({
             "text": text,
             "x"   : c["x"],
             "y"   : c["y"],
-            "z"   : c.get("z", 0) + 1.5,   # above floor at door height
+            "z"   : c.get("z", 0) + 1.5,   
         })
 
     if not labels:
@@ -131,17 +110,7 @@ for area in bpy.context.screen.areas:
     if area.type == 'VIEW_3D': area.tag_redraw()
 """
     send_to_blender(code)
-    # Fix applied: this creates 80 separate text objects, each with
-    # its own new material — bpy.ops.object.text_add() called 80
-    # times is genuinely expensive, and 30s may not be enough for
-    # Blender to finish before this gives up waiting. Confirmed
-    # directly: a real phase1_setup.py run showed BOTH "created" and
-    # "status" falling back to "?" (their .get() defaults), which
-    # only happens if the returned dict has neither key — consistent
-    # with a timeout fallback shape, not this function's own
-    # success/error dict (which always has both). bake_animation()
-    # elsewhere in this project does far more work per call and uses
-    # timeout=300.0 for exactly this reason.
+
     result = _read_result(timeout=90.0)
 
     if missing_centroid:
@@ -200,9 +169,6 @@ def create_corridor_signs() -> dict:
                                "label": "F2 CORRIDOR"},
         "SIGN_F3_CORRIDOR"  : {"x": 0,  "y": -5,  "z": 11.2, "floor": "F3",
                                "label": "F3 CORRIDOR"},
-
-        # Offset from the real "3-A" corridor centroid. Not a true
-        # stairwell position — see docstring above.
         "SIGN_F3_STAIR"     : {**stair_pos, "floor": "F3",
                                "label": "F3 STAIRWELL"},
     }

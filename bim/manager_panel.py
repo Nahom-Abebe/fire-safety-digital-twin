@@ -1,19 +1,4 @@
 # bim/manager_panel.py
-# Building manager overlay — ESCALATE triggers a real, signage-aware
-# pathfinding evacuation.
-#
-# Path computation and cone animation now live entirely in
-# bim/assembly_point.py (compute_signage_aware_evacuation_paths() +
-# animate_evacuation_via_paths()) rather than being duplicated here.
-# The previous local _build_simple_paths() used a fixed 3-hop guess
-# (nearest corridor -> a hardcoded exit fallback -> assembly) with no
-# awareness of current sign state at all. The new version is a real
-# networkx shortest path per occupant that penalises any node the
-# graph currently marks sign_blocked — the same property normal-
-# operation movement already reacts to — so evacuating occupants
-# genuinely route around whatever the signage is currently telling
-# them to avoid, using data that's already real elsewhere in the
-# project rather than a new rule invented just for escalation.
 
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

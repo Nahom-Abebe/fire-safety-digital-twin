@@ -1,7 +1,6 @@
 # bim/ifc_bridge.py
 # Blender socket connection + Pset get/set via GlobalId
 # Protocol: plain UTF-8 JSON over TCP
-# Result channel: file-based (Blender writes JSON, Python reads it)
 
 import socket, json, os, time
 

@@ -1,13 +1,5 @@
 # bake_animation.py
 # Bakes smooth keyframed occupancy management animation into Blender.
-# This is the VISUAL DEMO tool — no Claude agent, no API cost.
-#
-# Scenarios show localised occupancy violations and redirection:
-#   - Occupants move naturally (random walk)
-#   - When a room exceeds ADB capacity, it turns RED
-#   - Physical corridor sign updates with clear occupant directions
-#   - Digital twin HUD board updates with ADB Cl.2.43 citations / escalation alerts
-#   - Occupants naturally disperse from overcrowded room
 
 import sys, os, argparse, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,7 +8,7 @@ from bim.animation_baker import bake_animation
 from bim.viewport_utils import frame_view_on_objects
 from bim.ifc_bridge import test_connection, send_to_blender
 
-# ── Synchronized Scenario Definitions ─────────────────────────────────────────
+# Synchronized Scenario Definitions 
 
 SCENARIOS = {
     "default": {
@@ -62,15 +54,15 @@ SCENARIOS = {
 
     "TS-05": {
         "description"   : "Baseline — no violation (normal operation)",
-        "violation_tick": 999,   # never triggers within 15 ticks
-        "violation_room": None,  # Explicit baseline representation
+        "violation_tick": 999,   
+        "violation_room": None,  
         "ticks"         : 15,
         "seed"          : 5,
     },
 }
 
 
-# ── Viewport Shading Guard ───────────────────────────────────────────────────
+# Viewport Shading Guard 
 
 def ensure_material_shading():
     """Forces Blender viewport into Material Preview to ensure colors/emissions render."""
@@ -85,7 +77,7 @@ for area in bpy.context.screen.areas:
 """)
 
 
-# ── Playback Helpers ──────────────────────────────────────────────────────────
+# Playback Helpers 
 
 def play_animation() -> dict:
     """Start Blender playback via socket — no spacebar needed."""
@@ -96,7 +88,6 @@ bpy.context.scene.frame_set(0)
 bpy.ops.screen.animation_play()
 print('Playback started')
 """)
-
 
 def drive_animation(total_frames: int, frames_per_tick: int, frame_delay: float = 0.08):
     """
@@ -138,7 +129,7 @@ print('At frame {frame}')
     print(f"Blender is now at frame {frame}")
 
 
-# ── Main Bake Function ────────────────────────────────────────────────────────
+# Main Bake Function 
 
 def main(scenario: str = "default",
          frames_per_tick: int = 24,
@@ -149,17 +140,16 @@ def main(scenario: str = "default",
     print(f"   BAKING ANIMATION — {scenario}")
     print("=" * 60)
 
-    # ── Connection check ───────────────────────────────────────────────
+    # Connection check 
     print("\nChecking Blender connection...")
     if not test_connection():
         print("FAILED — open Blender, load IFC, start MCP server (N-panel)")
         return
     print("OK")
-
-    # Force view setup before execution
+    
     ensure_material_shading()
 
-    # ── Load scenario ──────────────────────────────────────────────────
+    #  Load scenario 
     sc = SCENARIOS.get(scenario, SCENARIOS["default"])
     v_tick  = sc["violation_tick"]
     v_room  = sc.get("violation_room")
@@ -192,10 +182,10 @@ def main(scenario: str = "default",
     total             = result["total_frames"]
     violation_frame = v_tick * frames_per_tick if (v_tick < 999 and v_room is not None) else None
 
-    # ── Frame viewport on markers ──────────────────────────────────────
+    # Frame viewport on markers 
     frame_view_on_objects("Occupant_")
 
-    # ── Summary ────────────────────────────────────────────────────────
+    # Summary 
     print("\n" + "=" * 60)
     print("   BAKE COMPLETE")
     print(f"   Markers baked    : {result.get('markers_baked', 80)}")
@@ -212,7 +202,7 @@ def main(scenario: str = "default",
         print(f"   No violation     : baseline scenario (normal operation)")
     print("=" * 60)
 
-    # ── Playback ───────────────────────────────────────────────────────
+    # Playback 
     if auto_drive:
         drive_animation(total, frames_per_tick, frame_delay)
     else:
@@ -225,8 +215,7 @@ def main(scenario: str = "default",
         if violation_frame:
             print(f"  python bake_animation.py --jump {violation_frame}")
 
-
-# ── Entry Point ───────────────────────────────────────────────────────────────
+# Entry Point 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -267,7 +256,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # ── Jump-only mode ─────────────────────────────────────────────────
+    # Jump-only mode 
     if args.jump is not None:
         print("Checking Blender connection...")
         if test_connection():
@@ -275,7 +264,7 @@ if __name__ == "__main__":
         else:
             print("FAILED — start Bonsai MCP server in N-panel")
 
-    # ── Play-only mode ─────────────────────────────────────────────────
+    # Play-only mode 
     elif args.play:
         print("Checking Blender connection...")
         if test_connection():
@@ -284,7 +273,7 @@ if __name__ == "__main__":
         else:
             print("FAILED — start Bonsai MCP server in N-panel")
 
-    # ── Full bake + playback ───────────────────────────────────────────
+    # Full bake + playback 
     else:
         main(
             scenario        = args.scenario,
