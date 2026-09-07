@@ -2,7 +2,7 @@
 
 A Blender + IFC digital twin for care home occupancy management, built on top of [Bonsai-mcp](https://github.com/JotaDeRodriguez/Bonsai_mcp). The system reads a live IFC/BIM model, simulates occupant movement through the building graph, and drives an autonomous agent that checks occupancy against Approved Document B (ADB) fire safety guidance and updates corridor signage in real time.
 
-This is not an evacuation model, instead it identifies when a room's occupancy exceeds a safe threshold and redirects occupants toward alternative spaces, it is an occupancy management twin.
+This is not an evacuation model; instead, it identifies when a room's occupancy exceeds a safe threshold and redirects occupants toward alternative spaces — it is an occupancy management twin.
 
 ## Features
 
@@ -31,25 +31,27 @@ The system is built in four layers on top of the Bonsai-mcp Blender/IFC bridge:
 The compliance agent runs a **Sense → Reason → Act** loop against the live Blender/IFC model on every polling cycle. Nothing is scripted or pre-decided — each cycle starts from a fresh read of the model and only acts if that read justifies it.
 
 ```
-┌──────────┐     MCP tool calls      ┌───────────────┐
-│  Agent    │ ───────────────────▶  │  Bonsai-mcp    │
-│ (Sense →  │                       │  Blender addon │
-│  Reason → │ ◀─────────────────── │  (socket server)│
-│  Act)     │   IFC query results   └───────┬────────┘
-└──────────┘                                │
-                                    reads/writes IFC Psets
-                                             ▼
-                                    ┌────────────────┐
-                                    │  IFC model in   │
-                                    │  Blender scene   │
-                                    └────────────────┘
+┌───────────────────────┐                          ┌─────────────────┐
+│         Agent         │                          │    Bonsai-mcp   │
+│                       │      MCP tool calls       │   Blender addon │
+│ Sense → Reason → Act  │ ────────────────────────▶ │ (socket server) │
+│                       │ ◀──────────────────────── │                 │
+└───────────────────────┘      IFC query results    └────────┬────────┘
+                                                               │
+                                                    reads/writes IFC Psets
+                                                               │
+                                                               ▼
+                                                    ┌────────────────────┐
+                                                    │  IFC model in the  │
+                                                    │   Blender scene    │
+                                                    └────────────────────┘
 ```
 
-**Sense** — The agent queries the MCP server for the current state of the model: per-room occupancy counts (via the building graph's live snapshot), exit status, and any rooms currently flagged over their ADB maximum. This is a read-only pass — `get_ifc_pset_properties` and the occupancy snapshot tools report what is true right now, nothing more. If nothing is over threshold, the loop idles and waits for the next polling cycle; no regulation lookup or signage action happens on an idle tick.
+**Sense** — The agent calls the `sense_building_state` and `sense_room` MCP tools to read the current state of the model: per-room occupancy counts, exit status, and any rooms currently flagged over their ADB maximum. This is a read-only pass — it reports what is true right now, nothing more. If nothing is over threshold, the loop idles and waits for the next polling cycle; no regulation lookup or signage action happens on an idle tick.
 
-**Reason** — Only once a violation is sensed does the agent retrieve the relevant clause from the Approved Document B corpus via RAG, then reason jointly over that regulatory text and the specific spatial context it was retrieved for (which room, which floor, which occupants, whether an occupant has a mobility constraint). This is also where multi-alert ticks get filtered — a room sitting exactly at capacity or a large communal room like a lounge with headroom to spare is reasoned about and correctly dismissed as a false positive rather than acted on.
+**Reason** — Only once a violation is sensed does the agent call `get_regulations` (and, for a confirmed violation, `get_adb_violation_context`) to retrieve the relevant clause from the Approved Document B corpus via RAG, then reason jointly over that regulatory text and the specific spatial context it was retrieved for — which room, which floor, which occupants, whether an occupant has a mobility constraint. `check_compliance` performs the deterministic pass/fail check against the room's IFC-derived maximum occupancy. This is also where multi-alert ticks get filtered: a room sitting exactly at capacity, or a large communal room such as a lounge with headroom to spare, is reasoned about and correctly dismissed as a false positive rather than acted on.
 
-**Act** — Only after reasoning confirms a genuine violation does the agent issue a structured intervention as an MCP tool call, typically `update_ifc_pset_properties` writing `ComplianceStatus`, `CurrentMessage`, and `LastUpdatedBy` into `Pset_FireSafetyStatus` on the affected `IfcSpace`, followed by a call into `bim/signage.py` to update the corresponding physical corridor sign panel in the Blender scene. Every reasoning step along the way — sensed state, clause retrieved, decision reached, action taken — is written live to an in-scene status board so the cycle is visible while it runs, not just in the terminal log.
+**Act** — Only after reasoning confirms a genuine violation does the agent call `act_update_sign`, which writes `ComplianceStatus`, `CurrentMessage`, and `LastUpdatedBy` into `Pset_FireSafetyStatus` on the affected `IfcSpace` (via `bim/ifc_bridge.py`'s `update_ifc_pset_properties`) and updates the corresponding physical corridor sign panel in the Blender scene. `act_update_board` then reflects the outcome — including an idle cycle — on the in-scene status board, so the reasoning chain is visible while it runs, not just in the terminal log.
 
 Because signage and compliance status are written back through IFC Psets rather than kept only in Python memory, the twin's decisions persist in the BIM data itself — reopening the IFC file later still shows which rooms were flagged and why.
 
@@ -86,6 +88,9 @@ pip install networkx
 ## Quick Start
 
 ```bash
+# One-time: build the ADB regulation vector database (requires the source PDF in data/)
+python build_rag.py
+
 # Pre-warm the ADB regulation retriever (no API cost)
 python -m rag.retriever
 
@@ -131,7 +136,6 @@ An in-viewport overlay (installed by `phase1_setup.py`) provides two buttons:
 
 - **ESCALATE** — computes an exit path (room → corridor → exit → assembly point) for every occupant and walks them there at a fixed pace, turning all corridor signs red
 - **RESET** — clears all signage back to green
-
 
 ### Live agent
 
@@ -186,7 +190,7 @@ The simulation is a probabilistic random walk over the building graph: each occu
 - Corridor sign wording for the four primary floor signs is generated by a shared template inside `animation_baker.py`; scenario-specific styling (for example, distinct wording for accessibility-related signage) requires extending that template directly rather than overriding it from the driving script, to avoid two processes writing the same Blender object on the same frame
 - The building graph and ADB occupancy limits are specific to the modelled care home and would need remapping for a different building
 - Large IFC models may slow keyframe baking; scenario ticks and occupant counts can be reduced for faster iteration during development
-- Gap between the backend logic and the visualization 
+- A gap remains between the backend compliance logic and its Blender visualization: the two are bridged only through IFC Pset writes, so a change to one occasionally requires a corresponding update to the other rather than the two being fully decoupled
 
 ## Acknowledgements
 

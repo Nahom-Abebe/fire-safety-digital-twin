@@ -1,10 +1,10 @@
 {
   "scenario_id": "TS-01",
-  "latency_seconds": 31.072,
+  "latency_seconds": 22.993,
   "api_turns": 7,
-  "api_time_seconds": 29.236,
-  "tool_time_seconds": 1.835,
-  "overhead_seconds": 0.001,
+  "api_time_seconds": 22.322,
+  "tool_time_seconds": 0.672,
+  "overhead_seconds": 0.0,
   "tool_count": 9,
   "tools_used": [
     "sense_building_state",
@@ -20,12 +20,12 @@
   "directive_clean": {
     "cycle": "Tick 0 - VIOLATION",
     "rooms": "1-1 (4/3) FAIL, 1-10 (3/3) WARNING, 3-4 (3/3) WARNING, 3-5 (3/3) WARNING",
-    "adb": "Clause 2.43 - bedroom occupancy standard per bed provision within Purpose Group 2a residential institutional",
+    "adb": "Clause 2.43 - bedroom occupancy standard (bed provision)",
     "signs": "SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> ALTERNATE",
-    "action": "Room 1-1 over capacity; attractiveness 0.0, F1 sign BLOCKED. Rooms 1-10, 3-4, 3-5 at capacity; attractiveness 0.3, corridor signs ALTERNATE to pre-emptively redistribute occupants.",
-    "escalate": "Yes - room 1-1 exceeds maximum permitted occupancy per ADB Clause 2.43"
+    "action": "Room 1-1 set BLOCKED with 0.0 attractiveness; Rooms 1-10, 3-4, 3-5 set ALTERNATE with 0.3 attractiveness to discourage further entry.",
+    "escalate": "Yes - Room 1-1 has exceeded safe occupancy by 1 occupant and requires immediate management intervention to reduce occupancy."
   },
-  "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-1 (4/3) FAIL, 1-10 (3/3) WARNING, 3-4 (3/3) WARNING, 3-5 (3/3) WARNING\nADB: Clause 2.43 - bedroom occupancy standard per bed provision within Purpose Group 2a residential institutional\nSIGNS: SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> ALTERNATE\nACTION: Room 1-1 over capacity; attractiveness 0.0, F1 sign BLOCKED. Rooms 1-10, 3-4, 3-5 at capacity; attractiveness 0.3, corridor signs ALTERNATE to pre-emptively redistribute occupants.\nESCALATE: Yes - room 1-1 exceeds maximum permitted occupancy per ADB Clause 2.43",
+  "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-1 (4/3) FAIL, 1-10 (3/3) WARNING, 3-4 (3/3) WARNING, 3-5 (3/3) WARNING\nADB: Clause 2.43 - bedroom occupancy standard (bed provision)\nSIGNS: SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> ALTERNATE\nACTION: Room 1-1 set BLOCKED with 0.0 attractiveness; Rooms 1-10, 3-4, 3-5 set ALTERNATE with 0.3 attractiveness to discourage further entry.\nESCALATE: Yes - Room 1-1 has exceeded safe occupancy by 1 occupant and requires immediate management intervention to reduce occupancy.",
   "evaluation": {
     "passed": true,
     "sequence_valid": true,
@@ -34,6 +34,6 @@
     "failure_reasons": []
   },
   "sign_updates": 2,
-  "timestamp": "2026-08-29 17:13:46",
+  "timestamp": "2026-09-03 10:09:04",
   "pre_condition": "1 violations"
 }

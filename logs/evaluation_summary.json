@@ -2,16 +2,16 @@
   "TS-01": {
     "trials_executed": 1,
     "pass_rate_pct": 100.0,
-    "mean_latency": 31.072,
+    "mean_latency": 27.219,
     "std_latency": 0.0,
     "avg_tools_used": 9,
     "trials": [
       {
         "scenario_id": "TS-01",
-        "latency_seconds": 31.072,
-        "api_turns": 7,
-        "api_time_seconds": 29.236,
-        "tool_time_seconds": 1.835,
+        "latency_seconds": 27.219,
+        "api_turns": 6,
+        "api_time_seconds": 26.101,
+        "tool_time_seconds": 1.117,
         "overhead_seconds": 0.001,
         "tool_count": 9,
         "tools_used": [
@@ -28,12 +28,12 @@
         "directive_clean": {
           "cycle": "Tick 0 - VIOLATION",
           "rooms": "1-1 (4/3) FAIL, 1-10 (3/3) WARNING, 3-4 (3/3) WARNING, 3-5 (3/3) WARNING",
-          "adb": "Clause 2.43 - bedroom occupancy standard per bed provision within Purpose Group 2a residential institutional",
+          "adb": "Clause 2.43 - Bedroom bed provision and occupancy standards for Purpose Group 2a residential care home",
           "signs": "SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> ALTERNATE",
-          "action": "Room 1-1 over capacity; attractiveness 0.0, F1 sign BLOCKED. Rooms 1-10, 3-4, 3-5 at capacity; attractiveness 0.3, corridor signs ALTERNATE to pre-emptively redistribute occupants.",
-          "escalate": "Yes - room 1-1 exceeds maximum permitted occupancy per ADB Clause 2.43"
+          "action": "Room 1-1 marked as OVER capacity (BLOCKED sign, 0.0 attractiveness). Rooms 1-10, 3-4, 3-5 at max capacity (ALTERNATE sign, 0.3 attractiveness) to pre-emptively discourage additional occupants.",
+          "escalate": "Yes - Room 1-1 exceeds ADB Clause 2.43 maximum bedroom capacity; immediate occupant redistribution required"
         },
-        "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-1 (4/3) FAIL, 1-10 (3/3) WARNING, 3-4 (3/3) WARNING, 3-5 (3/3) WARNING\nADB: Clause 2.43 - bedroom occupancy standard per bed provision within Purpose Group 2a residential institutional\nSIGNS: SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> ALTERNATE\nACTION: Room 1-1 over capacity; attractiveness 0.0, F1 sign BLOCKED. Rooms 1-10, 3-4, 3-5 at capacity; attractiveness 0.3, corridor signs ALTERNATE to pre-emptively redistribute occupants.\nESCALATE: Yes - room 1-1 exceeds maximum permitted occupancy per ADB Clause 2.43",
+        "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-1 (4/3) FAIL, 1-10 (3/3) WARNING, 3-4 (3/3) WARNING, 3-5 (3/3) WARNING\nADB: Clause 2.43 - Bedroom bed provision and occupancy standards for Purpose Group 2a residential care home\nSIGNS: SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> ALTERNATE\nACTION: Room 1-1 marked as OVER capacity (BLOCKED sign, 0.0 attractiveness). Rooms 1-10, 3-4, 3-5 at max capacity (ALTERNATE sign, 0.3 attractiveness) to pre-emptively discourage additional occupants.\nESCALATE: Yes - Room 1-1 exceeds ADB Clause 2.43 maximum bedroom capacity; immediate occupant redistribution required",
         "evaluation": {
           "passed": true,
           "sequence_valid": true,
@@ -42,7 +42,7 @@
           "failure_reasons": []
         },
         "sign_updates": 2,
-        "timestamp": "2026-08-29 17:13:46",
+        "timestamp": "2026-09-03 09:35:02",
         "pre_condition": "1 violations"
       }
     ]
@@ -50,25 +50,26 @@
   "TS-02": {
     "trials_executed": 1,
     "pass_rate_pct": 100.0,
-    "mean_latency": 36.645,
+    "mean_latency": 38.487,
     "std_latency": 0.0,
-    "avg_tools_used": 11,
+    "avg_tools_used": 12,
     "trials": [
       {
         "scenario_id": "TS-02",
-        "latency_seconds": 36.645,
-        "api_turns": 7,
-        "api_time_seconds": 33.867,
-        "tool_time_seconds": 2.774,
-        "overhead_seconds": 0.004,
-        "tool_count": 11,
+        "latency_seconds": 38.487,
+        "api_turns": 5,
+        "api_time_seconds": 35.1,
+        "tool_time_seconds": 3.386,
+        "overhead_seconds": 0.001,
+        "tool_count": 12,
         "tools_used": [
           "sense_building_state",
-          "list_signs",
           "sense_rooms",
           "get_regulations",
           "get_regulations",
           "check_compliance_batch",
+          "list_signs",
+          "act_update_sign",
           "act_update_sign",
           "act_update_sign",
           "act_update_sign",
@@ -78,12 +79,12 @@
         "directive_clean": {
           "cycle": "Tick 0 - VIOLATION",
           "rooms": "1-2 (4/3) FAIL, 1-3 (3/3) WARNING, 2-7 (5/3) FAIL, 3-5 (3/3) WARNING, 3-6 (5/3) FAIL, 3-8 (3/3) WARNING",
-          "adb": "Vol2 Table 2.1 escape route travel distance & Clause 2.43 bedroom occupancy - North exit obstructed, South routing enforced; multiple bedrooms at or over capacity per bed provision limits",
-          "signs": "SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F2_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> BLOCKED",
-          "action": "All floors redirected from North exit to South exit per Table 2.1. Rooms 1-2, 2-7, 3-6 set to attractiveness 0.0 (occupied at FAIL). Rooms 1-3, 3-5, 3-8 set to 0.3 (at WARNING).",
-          "escalate": "Yes - North exit obstruction combined with 3 bedrooms exceeding capacity and 3 at maximum. Immediate management review required."
+          "adb": "Table 2.1 (travel distance, exit obstruction) and Clause 2.43 (bedroom occupancy)",
+          "signs": "SIGN_F0_CORRIDOR_N -> BLOCKED | SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F2_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> BLOCKED",
+          "action": "North exit route blocked per Table 2.1; redirected all floors to South exit. Rooms 1-2, 2-7, 3-6 set to 0.0 attractiveness (FAIL); rooms 1-3, 3-5, 3-8 set to 0.3 (WARNING pre-emptive).",
+          "escalate": "Yes - Combined exit obstruction (Table 2.1) and three bedrooms in FAIL state (Clause 2.43) with three additional bedrooms at capacity limit"
         },
-        "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-2 (4/3) FAIL, 1-3 (3/3) WARNING, 2-7 (5/3) FAIL, 3-5 (3/3) WARNING, 3-6 (5/3) FAIL, 3-8 (3/3) WARNING\nADB: Vol2 Table 2.1 escape route travel distance & Clause 2.43 bedroom occupancy - North exit obstructed, South routing enforced; multiple bedrooms at or over capacity per bed provision limits\nSIGNS: SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F2_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> BLOCKED\nACTION: All floors redirected from North exit to South exit per Table 2.1. Rooms 1-2, 2-7, 3-6 set to attractiveness 0.0 (occupied at FAIL). Rooms 1-3, 3-5, 3-8 set to 0.3 (at WARNING).\nESCALATE: Yes - North exit obstruction combined with 3 bedrooms exceeding capacity and 3 at maximum. Immediate management review required.",
+        "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-2 (4/3) FAIL, 1-3 (3/3) WARNING, 2-7 (5/3) FAIL, 3-5 (3/3) WARNING, 3-6 (5/3) FAIL, 3-8 (3/3) WARNING\nADB: Table 2.1 (travel distance, exit obstruction) and Clause 2.43 (bedroom occupancy)\nSIGNS: SIGN_F0_CORRIDOR_N -> BLOCKED | SIGN_F1_CORRIDOR -> BLOCKED | SIGN_F2_CORRIDOR -> BLOCKED | SIGN_F3_CORRIDOR -> BLOCKED\nACTION: North exit route blocked per Table 2.1; redirected all floors to South exit. Rooms 1-2, 2-7, 3-6 set to 0.0 attractiveness (FAIL); rooms 1-3, 3-5, 3-8 set to 0.3 (WARNING pre-emptive).\nESCALATE: Yes - Combined exit obstruction (Table 2.1) and three bedrooms in FAIL state (Clause 2.43) with three additional bedrooms at capacity limit",
         "evaluation": {
           "passed": true,
           "sequence_valid": true,
@@ -91,8 +92,8 @@
           "behavior_valid": true,
           "failure_reasons": []
         },
-        "sign_updates": 3,
-        "timestamp": "2026-08-29 17:14:23",
+        "sign_updates": 4,
+        "timestamp": "2026-09-03 09:35:41",
         "pre_condition": "['EXIT-1'] blocked"
       }
     ]
@@ -100,24 +101,25 @@
   "TS-03": {
     "trials_executed": 1,
     "pass_rate_pct": 100.0,
-    "mean_latency": 32.767,
+    "mean_latency": 31.631,
     "std_latency": 0.0,
-    "avg_tools_used": 10,
+    "avg_tools_used": 11,
     "trials": [
       {
         "scenario_id": "TS-03",
-        "latency_seconds": 32.767,
-        "api_turns": 7,
-        "api_time_seconds": 29.269,
-        "tool_time_seconds": 3.49,
-        "overhead_seconds": 0.008,
-        "tool_count": 10,
+        "latency_seconds": 31.631,
+        "api_turns": 6,
+        "api_time_seconds": 29.56,
+        "tool_time_seconds": 2.072,
+        "overhead_seconds": 0.0,
+        "tool_count": 11,
         "tools_used": [
           "sense_building_state",
           "sense_rooms",
-          "get_regulations",
-          "check_compliance_batch",
           "list_signs",
+          "check_compliance_batch",
+          "get_regulations",
+          "act_update_sign",
           "act_update_sign",
           "act_update_sign",
           "act_update_sign",
@@ -127,12 +129,12 @@
         "directive_clean": {
           "cycle": "Tick 0 - VIOLATION",
           "rooms": "1-10 (3/3) WARNING, 2-10 (3/3) WARNING, 3-1 (4/3) FAIL, 3-2 (4/3) FAIL, 3-10 (3/3) WARNING",
-          "adb": "Clause 2.43 - bedroom occupancy standard; bedrooms must not exceed their maximum occupant capacity",
-          "signs": "SIGN_F1_CORRIDOR -> ALTERNATE | SIGN_F2_CORRIDOR -> ALTERNATE | SIGN_F3_CORRIDOR -> BLOCKED",
-          "action": "Set attractiveness 0.3 for three WARNING rooms (1-10, 2-10, 3-10) and 0.0 for two FAIL rooms (3-1, 3-2); updated corridor signs on F1, F2, F3 to redirect occupants away from affected bedrooms.",
-          "escalate": "Yes - Two bedrooms (3-1, 3-2) exceed permitted capacity by one occupant each; immediate manual intervention required to relocate excess occupants."
+          "adb": "Clause 2.43 - bedroom occupancy standard for Purpose Group 2a residential care home",
+          "signs": "SIGN_F1_CORRIDOR -> ALTERNATE | SIGN_F2_CORRIDOR -> ALTERNATE | SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> ALTERNATE",
+          "action": "Set 3-1 and 3-2 to attractiveness 0.0 with BLOCKED corridor sign; set 1-10, 2-10, 3-10 to attractiveness 0.3 with ALTERNATE signs to discourage further occupancy and redirect via alternate routes.",
+          "escalate": "Yes - Two bedrooms (3-1, 3-2) on F3 have exceeded their ADB-permitted capacity (4 occupants vs. 3 maximum per Clause 2.43) and require active occupancy reduction."
         },
-        "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-10 (3/3) WARNING, 2-10 (3/3) WARNING, 3-1 (4/3) FAIL, 3-2 (4/3) FAIL, 3-10 (3/3) WARNING\nADB: Clause 2.43 - bedroom occupancy standard; bedrooms must not exceed their maximum occupant capacity\nSIGNS: SIGN_F1_CORRIDOR -> ALTERNATE | SIGN_F2_CORRIDOR -> ALTERNATE | SIGN_F3_CORRIDOR -> BLOCKED\nACTION: Set attractiveness 0.3 for three WARNING rooms (1-10, 2-10, 3-10) and 0.0 for two FAIL rooms (3-1, 3-2); updated corridor signs on F1, F2, F3 to redirect occupants away from affected bedrooms.\nESCALATE: Yes - Two bedrooms (3-1, 3-2) exceed permitted capacity by one occupant each; immediate manual intervention required to relocate excess occupants.",
+        "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 1-10 (3/3) WARNING, 2-10 (3/3) WARNING, 3-1 (4/3) FAIL, 3-2 (4/3) FAIL, 3-10 (3/3) WARNING\nADB: Clause 2.43 - bedroom occupancy standard for Purpose Group 2a residential care home\nSIGNS: SIGN_F1_CORRIDOR -> ALTERNATE | SIGN_F2_CORRIDOR -> ALTERNATE | SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> ALTERNATE\nACTION: Set 3-1 and 3-2 to attractiveness 0.0 with BLOCKED corridor sign; set 1-10, 2-10, 3-10 to attractiveness 0.3 with ALTERNATE signs to discourage further occupancy and redirect via alternate routes.\nESCALATE: Yes - Two bedrooms (3-1, 3-2) on F3 have exceeded their ADB-permitted capacity (4 occupants vs. 3 maximum per Clause 2.43) and require active occupancy reduction.",
         "evaluation": {
           "passed": true,
           "sequence_valid": true,
@@ -140,8 +142,8 @@
           "behavior_valid": true,
           "failure_reasons": []
         },
-        "sign_updates": 3,
-        "timestamp": "2026-08-29 17:14:55",
+        "sign_updates": 4,
+        "timestamp": "2026-09-03 09:36:13",
         "pre_condition": "2 violations"
       }
     ]
@@ -149,17 +151,17 @@
   "TS-04": {
     "trials_executed": 1,
     "pass_rate_pct": 100.0,
-    "mean_latency": 29.958,
+    "mean_latency": 28.453,
     "std_latency": 0.0,
     "avg_tools_used": 10,
     "trials": [
       {
         "scenario_id": "TS-04",
-        "latency_seconds": 29.958,
+        "latency_seconds": 28.453,
         "api_turns": 6,
-        "api_time_seconds": 27.595,
-        "tool_time_seconds": 2.356,
-        "overhead_seconds": 0.007,
+        "api_time_seconds": 26.39,
+        "tool_time_seconds": 2.062,
+        "overhead_seconds": 0.001,
         "tool_count": 10,
         "tools_used": [
           "sense_building_state",
@@ -167,7 +169,7 @@
           "get_regulations",
           "get_regulations",
           "check_compliance",
-          "get_adb_violation_context",
+          "get_regulations",
           "act_update_sign",
           "act_update_sign",
           "act_set_room_attractiveness",
@@ -176,12 +178,12 @@
         "directive_clean": {
           "cycle": "Tick 0 - VIOLATION",
           "rooms": "3-10 (4/3) FAIL",
-          "adb": "Clause 2.43 (Bedroom occupancy); Sections 3.4-3.8 (Wheelchair refuge areas); Table 2.1 (Travel distance accessible escape); Section 2.33 (Care home evacuation)",
-          "signs": "SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> BLOCKED",
-          "action": "Room 3-10 exceeds max occupancy of 3 (currently 4). Updated F3 corridor and stairwell signs to block entry, direct wheelchair user to accessible refuge per ADB Sections 3.4-3.8, and set room attractiveness to 0.0 to prevent further occupant ingress. Stairwell B-L3 marked inaccessible for wheelchair users with directive to proceed to designated refuge.",
-          "escalate": "Yes - Over-capacity bedroom with mobility-impaired occupant and inaccessible primary escape route; facility staff must activate personal emergency evacuation plan per ADB Section 2.33 and ensure wheelchair user reaches protected refuge area immediately."
+          "adb": "Clause 2.43 (bedroom occupancy standard) and Sections 3.4-3.8 (refuge areas for wheelchair users)",
+          "signs": "SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> ALTERNATE",
+          "action": "Room 3-10 over capacity; signage updated to redirect occupants and wheelchair users to accessible refuge area; stairwell B-L3 marked not wheelchair accessible per ADB refuge requirements.",
+          "escalate": "Yes - wheelchair user present in overcrowded room with inaccessible primary stair; refuge area assignment and accessible egress route must be verified immediately."
         },
-        "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 3-10 (4/3) FAIL\nADB: Clause 2.43 (Bedroom occupancy); Sections 3.4-3.8 (Wheelchair refuge areas); Table 2.1 (Travel distance accessible escape); Section 2.33 (Care home evacuation)\nSIGNS: SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> BLOCKED\nACTION: Room 3-10 exceeds max occupancy of 3 (currently 4). Updated F3 corridor and stairwell signs to block entry, direct wheelchair user to accessible refuge per ADB Sections 3.4-3.8, and set room attractiveness to 0.0 to prevent further occupant ingress. Stairwell B-L3 marked inaccessible for wheelchair users with directive to proceed to designated refuge.\nESCALATE: Yes - Over-capacity bedroom with mobility-impaired occupant and inaccessible primary escape route; facility staff must activate personal emergency evacuation plan per ADB Section 2.33 and ensure wheelchair user reaches protected refuge area immediately.",
+        "directive_raw": "CYCLE: Tick 0 - VIOLATION\nROOMS: 3-10 (4/3) FAIL\nADB: Clause 2.43 (bedroom occupancy standard) and Sections 3.4-3.8 (refuge areas for wheelchair users)\nSIGNS: SIGN_F3_CORRIDOR -> BLOCKED | SIGN_F3_STAIR -> ALTERNATE\nACTION: Room 3-10 over capacity; signage updated to redirect occupants and wheelchair users to accessible refuge area; stairwell B-L3 marked not wheelchair accessible per ADB refuge requirements.\nESCALATE: Yes - wheelchair user present in overcrowded room with inaccessible primary stair; refuge area assignment and accessible egress route must be verified immediately.",
         "evaluation": {
           "passed": true,
           "sequence_valid": true,
@@ -190,7 +192,7 @@
           "failure_reasons": []
         },
         "sign_updates": 2,
-        "timestamp": "2026-08-29 17:15:25",
+        "timestamp": "2026-09-03 09:36:41",
         "pre_condition": "3-10 over capacity, wheelchair user"
       }
     ]
@@ -198,31 +200,34 @@
   "TS-05": {
     "trials_executed": 1,
     "pass_rate_pct": 100.0,
-    "mean_latency": 12.821,
+    "mean_latency": 15.045,
     "std_latency": 0.0,
-    "avg_tools_used": 4,
+    "avg_tools_used": 5,
     "trials": [
       {
         "scenario_id": "TS-05",
-        "latency_seconds": 12.821,
-        "api_turns": 4,
-        "api_time_seconds": 12.104,
-        "tool_time_seconds": 0.715,
-        "overhead_seconds": 0.002,
-        "tool_count": 4,
+        "latency_seconds": 15.045,
+        "api_turns": 5,
+        "api_time_seconds": 14.501,
+        "tool_time_seconds": 0.527,
+        "overhead_seconds": 0.017,
+        "tool_count": 5,
         "tools_used": [
           "sense_building_state",
           "sense_room",
+          "get_regulations",
           "check_compliance",
           "act_update_board"
         ],
         "directive_clean": {
-          "cycle": "Tick 0 \u2014 IDLE",
-          "adb": "See directive_raw for ADB citation",
-          "action": "See directive_raw for action taken",
-          "note": "Verbose format parsed"
+          "cycle": "Tick 0 - PRE-EMPTIVE",
+          "rooms": "1-12 (3/3) WARNING",
+          "adb": "Clause 2.43 - bedroom occupancy standard",
+          "signs": "None",
+          "action": "Room 1-12 at maximum permitted capacity (3/3). No intervention required; room is compliant.",
+          "escalate": "No"
         },
-        "directive_raw": "All rooms within safe occupancy limits - no action required",
+        "directive_raw": "CYCLE: Tick 0 - PRE-EMPTIVE\nROOMS: 1-12 (3/3) WARNING\nADB: Clause 2.43 - bedroom occupancy standard\nSIGNS: None\nACTION: Room 1-12 at maximum permitted capacity (3/3). No intervention required; room is compliant.\nESCALATE: No",
         "evaluation": {
           "passed": true,
           "sequence_valid": true,
@@ -231,7 +236,7 @@
           "failure_reasons": []
         },
         "sign_updates": 0,
-        "timestamp": "2026-08-29 17:15:38",
+        "timestamp": "2026-09-03 09:36:56",
         "pre_condition": "0 OVER, 1 WARNING"
       }
     ]

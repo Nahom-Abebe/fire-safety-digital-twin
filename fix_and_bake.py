@@ -14,10 +14,6 @@ from sensors.agent_walk import simulate_agent_timeline
 from sensors.building_graph import BUILDING_GRAPH as G
 
 # ── Scenario definitions ──────────────────────────────────────────────────────
-# These declare CONFIGURATION for the simulation (which room, which exits
-# are blocked, which extra rooms fail, which occupant is mobility
-# constrained). Everything the twin shows is
-# computed from this configuration at run time.
 SCENARIOS = {
     "default": {
         "description"     : "First floor bedroom 2-1 approaches capacity",

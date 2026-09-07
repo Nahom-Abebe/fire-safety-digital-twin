@@ -1,24 +1,27 @@
 {
   "scenario_id": "TS-05",
-  "latency_seconds": 12.821,
-  "api_turns": 4,
-  "api_time_seconds": 12.104,
-  "tool_time_seconds": 0.715,
-  "overhead_seconds": 0.002,
-  "tool_count": 4,
+  "latency_seconds": 15.045,
+  "api_turns": 5,
+  "api_time_seconds": 14.501,
+  "tool_time_seconds": 0.527,
+  "overhead_seconds": 0.017,
+  "tool_count": 5,
   "tools_used": [
     "sense_building_state",
     "sense_room",
+    "get_regulations",
     "check_compliance",
     "act_update_board"
   ],
   "directive_clean": {
-    "cycle": "Tick 0 \u2014 IDLE",
-    "adb": "See directive_raw for ADB citation",
-    "action": "See directive_raw for action taken",
-    "note": "Verbose format parsed"
+    "cycle": "Tick 0 - PRE-EMPTIVE",
+    "rooms": "1-12 (3/3) WARNING",
+    "adb": "Clause 2.43 - bedroom occupancy standard",
+    "signs": "None",
+    "action": "Room 1-12 at maximum permitted capacity (3/3). No intervention required; room is compliant.",
+    "escalate": "No"
   },
-  "directive_raw": "All rooms within safe occupancy limits - no action required",
+  "directive_raw": "CYCLE: Tick 0 - PRE-EMPTIVE\nROOMS: 1-12 (3/3) WARNING\nADB: Clause 2.43 - bedroom occupancy standard\nSIGNS: None\nACTION: Room 1-12 at maximum permitted capacity (3/3). No intervention required; room is compliant.\nESCALATE: No",
   "evaluation": {
     "passed": true,
     "sequence_valid": true,
@@ -27,6 +30,6 @@
     "failure_reasons": []
   },
   "sign_updates": 0,
-  "timestamp": "2026-08-29 17:15:38",
+  "timestamp": "2026-09-03 09:36:56",
   "pre_condition": "0 OVER, 1 WARNING"
 }
